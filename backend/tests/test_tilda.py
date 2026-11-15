@@ -84,3 +84,27 @@ def test_server_demo_mode(monkeypatch, tmp_path):
     assert r.status_code == 200 and j["engine"] == "demo-conformer" and j["language"] == "te-IN"
     assert j["log"][0][1].startswith("error")
     assert c.get("/").status_code == 200
+
+
+def test_agent_actions():
+    from tilda.agent import interpret
+    assert interpret("Volume up")["action"] == "volume_up"
+    assert interpret("awaz kam karo")["action"] == "volume_down"
+    assert interpret("open YouTube")["action"] == "open_app"
+    assert interpret("youtube kholo")["args"]["app"] == "youtube"
+    assert interpret("search cheap flights to Pune")["args"]["query"] == "cheap flights to pune"
+    assert interpret("blah blah")["action"] == "none"
+    assert interpret("")["action"] == "none"
+
+
+def test_agent_asks_before_spending_or_sending():
+    from tilda.agent import interpret
+    assert interpret("book a train to Pune")["needs_yes"] is True
+    assert interpret("send message to Raj")["needs_yes"] is True
+    assert interpret("open maps")["needs_yes"] is False
+
+
+def test_agent_ignores_unsafe_llm_answer():
+    from tilda.agent import interpret
+    r = interpret("volume up", llm=lambda t: {"action": "delete_everything"})
+    assert r["action"] == "volume_up"

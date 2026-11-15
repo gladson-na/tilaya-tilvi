@@ -7,6 +7,7 @@ import os
 import subprocess
 import tempfile
 
+from .agent import interpret
 from flask import Flask, jsonify, request, send_from_directory
 
 from .engines import Engine, EngineError, Result, SarvamEngine, WhisperEngine, default_chain
@@ -39,6 +40,11 @@ def chains():
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
+
+
+@app.post("/act")
+def act():
+    return jsonify(interpret((request.get_json(silent=True) or {}).get("text", "")))
 
 
 @app.get("/languages")
@@ -79,7 +85,8 @@ def do_transcribe():
                 res, main_log = transcribe(wav, lang, main_chain, timeout=8)
                 log += main_log
                 return jsonify(text=res.text, engine=res.engine, language=lang,
-                               greeting_found=bool(greeting_langs), heard_first=said, log=log)
+                               greeting_found=bool(greeting_langs), heard_first=said, log=log,
+                               action=interpret(res.text))
             except AllEnginesFailed as e:
                 log += e.attempts
                 err = e
