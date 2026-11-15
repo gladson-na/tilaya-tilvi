@@ -18,7 +18,7 @@ pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-
 <pre id="log">Waiting.</pre>
 <script>
 const rec=document.getElementById('rec'),logEl=document.getElementById('log'),textEl=document.getElementById('text');
-fetch('languages').then(r=>r.json()).then(l=>l.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;document.getElementById('lang').append(o)}));
+Promise.all([fetch('languages').then(r=>r.json()),fetch('beta').then(r=>r.json())]).then(([l,b])=>l.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c+(b.includes(c)?' (beta)':'');document.getElementById('lang').append(o)}));
 let mr,chunks=[],timer,t0,downAt=0,starting=false,stopAfterStart=false;
 const HOLD_MS=450; // press longer than this = hold mode (release stops); shorter = tap mode (tap again stops)
 rec.addEventListener('contextmenu',e=>e.preventDefault());
@@ -53,14 +53,35 @@ function released(){
 }
 rec.addEventListener('pointerup',released);
 rec.addEventListener('pointercancel',released);
+// Offline safety: every recording is saved on the phone first. It is removed only after the
+// server answers, so a dropped or slow network never loses speech; it retries by itself.
+const DB=new Promise((ok,no)=>{const q=indexedDB.open('tilda',1);q.onupgradeneeded=()=>q.result.createObjectStore('q',{autoIncrement:true});q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error)});
+async function store(mode,...a){const db=await DB;return new Promise((ok,no)=>{const t=db.transaction('q',mode),o=t.objectStore('q');let r;if(a[0]==='add')r=o.add(a[1]);else if(a[0]==='del')r=o.delete(a[1]);else r=o.openCursor();t.oncomplete=()=>ok(r&&r.result);t.onerror=()=>no(t.error)})}
+async function pending(){const db=await DB;return new Promise(ok=>{const out=[];const c=db.transaction('q').objectStore('q').openCursor();c.onsuccess=()=>{const x=c.result;if(x){out.push({key:x.key,val:x.value});x.continue()}else ok(out)}})}
+async function post(blob,lang){
+  const f=new FormData();f.append('audio',blob,'a.webm');f.append('lang',lang);
+  const r=await fetch('transcribe',{method:'POST',body:f,signal:AbortSignal.timeout(45000)});
+  if(!r.ok&&r.status!==502)throw new Error('http '+r.status);
+  return r.json();
+}
+function show(j){
+  textEl.textContent=j.text||'';
+  const lines=(j.log||[]).map(x=>x[0]+': '+x[1]);
+  logEl.textContent=(j.error?('FAILED: '+j.error+'\n'):('Engine used: '+j.engine+'\nLanguage: '+j.language+'\nGreeting found: '+j.greeting_found+'\nHeard first: '+j.heard_first+'\n'))+(j.action?('\nAction: '+j.action.action+' '+JSON.stringify(j.action.args)+(j.action.needs_yes?' (needs your yes)':'')+'\n'):'')+'\nTried:\n'+lines.join('\n');
+}
+let flushing=false;
+async function flush(){
+  if(flushing)return;flushing=true;
+  try{for(const {key,val} of await pending()){
+    try{const j=await post(val.blob,val.lang);await store('readwrite','del',key);show(j);textEl.textContent=(j.text||'')}catch(e){break}
+  }}finally{flushing=false}
+  const n=(await pending()).length;if(n)logEl.textContent='Waiting for network. '+n+' recording(s) saved, will transcribe automatically.';
+}
 async function send(){
   logEl.textContent='Working...';textEl.textContent='';
-  const f=new FormData();f.append('audio',new Blob(chunks),'a.webm');f.append('lang',document.getElementById('lang').value);
-  try{
-    const r=await fetch('transcribe',{method:'POST',body:f});const j=await r.json();
-    textEl.textContent=j.text||'';
-    const lines=(j.log||[]).map(x=>x[0]+': '+x[1]);
-    logEl.textContent=(j.error?('FAILED: '+j.error+'\n'):('Engine used: '+j.engine+'\nLanguage: '+j.language+'\nGreeting found: '+j.greeting_found+'\nHeard first: '+j.heard_first+'\n'))+(j.action?('\nAction: '+j.action.action+' '+JSON.stringify(j.action.args)+(j.action.needs_yes?' (needs your yes)':'')+'\n'):'')+'\nTried:\n'+lines.join('\n');
-  }catch(e){logEl.textContent='Error: '+e}
+  const blob=new Blob(chunks),lang=document.getElementById('lang').value;
+  await store('readwrite','add',{blob,lang});
+  await flush();
 }
+addEventListener('online',flush);setInterval(flush,10000);flush();
 </script></body></html>
