@@ -1,0 +1,14 @@
+language: en-US
+tone_instructions: "Plain words. Explain each problem like the reader is not a coder."
+reviews:
+  profile: chill
+  high_level_summary: true
+  request_changes_workflow: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "backend/**"
+      instructions: "Check that no API key or secret is written in code. Keys must come from environment variables. Check that every engine failure moves to the next engine."
+    - path: "app/**"
+      instructions: "Check that the app asks for microphone permission properly and never stores audio longer than needed."

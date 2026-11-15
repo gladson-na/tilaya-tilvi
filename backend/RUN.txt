@@ -1,0 +1,4 @@
+pip install flask requests
+TILDA_FAKE=1 python -m tilda.server   # demo mode, no key needed
+python -m tilda.server                # real mode (needs SARVAM_API_KEY and models)
+open http://localhost:8000
