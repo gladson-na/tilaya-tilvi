@@ -19,24 +19,31 @@ pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-
 <script>
 const rec=document.getElementById('rec'),logEl=document.getElementById('log'),textEl=document.getElementById('text');
 Promise.all([fetch('languages').then(r=>r.json()),fetch('beta').then(r=>r.json())]).then(([l,b])=>l.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c+(b.includes(c)?' (beta)':'');document.getElementById('lang').append(o)}));
-let mr,chunks=[],timer,t0,downAt=0,starting=false,stopAfterStart=false;
+let mr,stream,rot,sess=0,seq=0,timer,t0,downAt=0,starting=false,stopAfterStart=false;
+const SEG_MS=8000; // speech is cut into 8 s pieces, each saved on the phone the moment it ends
 const HOLD_MS=450; // press longer than this = hold mode (release stops); shorter = tap mode (tap again stops)
 rec.addEventListener('contextmenu',e=>e.preventDefault());
 function recording(){return mr&&mr.state==='recording'}
+function piece(final){
+  const r=new MediaRecorder(stream),buf=[];
+  r.ondataavailable=e=>buf.push(e.data);
+  r.onstop=async()=>{const blob=new Blob(buf);if(blob.size>800){await store('readwrite','add',{blob,lang:document.getElementById('lang').value,sess,seq:seq++});flush()}};
+  r.start();return r;
+}
 async function start(){
   starting=true;stopAfterStart=false;
-  let s;
-  try{s=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){starting=false;logEl.textContent='Microphone blocked: allow it in the browser and try again.';return}
-  mr=new MediaRecorder(s);chunks=[];
-  mr.ondataavailable=e=>chunks.push(e.data);
-  mr.onstop=send;mr.start();t0=Date.now();starting=false;rec.classList.add('on');
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){starting=false;logEl.textContent='Microphone blocked: allow it in the browser and try again.';return}
+  sess=Date.now();seq=0;sessText[sess]='';textEl.textContent='';logEl.textContent='Recording. Pieces are saved on your phone as you speak.';
+  mr=piece();t0=Date.now();starting=false;rec.classList.add('on');
+  // start the next piece BEFORE ending the current one so no words fall in a gap
+  rot=setInterval(()=>{const old=mr;mr=piece();old.stop()},SEG_MS);
   timer=setInterval(()=>{rec.textContent='Recording '+Math.round((Date.now()-t0)/1000)+'s'},250);
   rec.textContent='Recording 0s';
   if(stopAfterStart)stop();
 }
 function stop(){
-  clearInterval(timer);
-  if(recording()){mr.stop();mr.stream.getTracks().forEach(t=>t.stop())}
+  clearInterval(timer);clearInterval(rot);
+  if(recording()){mr.stop();stream.getTracks().forEach(t=>t.stop())}
   rec.classList.remove('on');rec.textContent='Tap or hold to record';
 }
 rec.addEventListener('pointerdown',e=>{
@@ -64,24 +71,26 @@ async function post(blob,lang){
   if(!r.ok&&r.status!==502)throw new Error('http '+r.status);
   return r.json();
 }
-function show(j){
-  textEl.textContent=j.text||'';
+const sessText={},sessLang={};
+function show(j,sid){
+  if(j.text)sessText[sid]=((sessText[sid]||'')+' '+j.text).trim();
+  textEl.textContent=sessText[sid]||'';
   const lines=(j.log||[]).map(x=>x[0]+': '+x[1]);
   logEl.textContent=(j.error?('FAILED: '+j.error+'\n'):('Engine used: '+j.engine+'\nLanguage: '+j.language+'\nGreeting found: '+j.greeting_found+'\nHeard first: '+j.heard_first+'\n'))+(j.action?('\nAction: '+j.action.action+' '+JSON.stringify(j.action.args)+(j.action.needs_yes?' (needs your yes)':'')+'\n'):'')+'\nTried:\n'+lines.join('\n');
 }
 let flushing=false;
 async function flush(){
   if(flushing)return;flushing=true;
-  try{for(const {key,val} of await pending()){
-    try{const j=await post(val.blob,val.lang);await store('readwrite','del',key);show(j);textEl.textContent=(j.text||'')}catch(e){break}
+  try{for(const {key,val} of (await pending()).sort((x,y)=>x.val.sess-y.val.sess||x.val.seq-y.val.seq)){
+    try{
+      const lang=(val.lang==='auto'&&sessLang[val.sess])||val.lang;
+      const j=await post(val.blob,lang);
+      if(j.error)throw new Error(j.error);
+      if(j.language&&j.language!=='unknown'&&val.lang==='auto')sessLang[val.sess]=j.language; // keep the greeted language for the rest of the speech
+      await store('readwrite','del',key);show(j,val.sess);
+    }catch(e){break}
   }}finally{flushing=false}
-  const n=(await pending()).length;if(n)logEl.textContent='Waiting for network. '+n+' recording(s) saved, will transcribe automatically.';
-}
-async function send(){
-  logEl.textContent='Working...';textEl.textContent='';
-  const blob=new Blob(chunks),lang=document.getElementById('lang').value;
-  await store('readwrite','add',{blob,lang});
-  await flush();
+  const n=(await pending()).length;if(n)logEl.textContent=(recording()?'Recording. ':'')+'No network: '+n+' piece(s) saved on your phone, text will appear when it returns.';
 }
 addEventListener('online',flush);setInterval(flush,10000);flush();
 </script></body></html>
