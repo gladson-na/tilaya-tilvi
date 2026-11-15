@@ -53,3 +53,26 @@ jobs:
         working-directory: app
       - uses: actions/upload-artifact@v4
         with: { name: tilda-windows, path: app/build/windows/x64/runner/Release }
+
+  release:
+    # Every green build on main replaces the "latest" release, so the download link never changes.
+    if: github.ref == 'refs/heads/main'
+    needs: [backend-tests, android, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: tilda-android-apk, path: out }
+      - uses: actions/download-artifact@v4
+        with: { name: tilda-windows, path: win }
+      - name: Publish latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv out/app-release.apk out/tilaya-tilvi.apk
+          (cd win && zip -qr ../out/tilaya-tilvi-windows.zip .)
+          gh release delete latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create latest out/tilaya-tilvi.apk out/tilaya-tilvi-windows.zip \
+            --repo "$GITHUB_REPOSITORY" --title "Latest build" \
+            --notes "Newest build from main. Updated automatically ($GITHUB_SHA)."
