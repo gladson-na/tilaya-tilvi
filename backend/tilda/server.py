@@ -11,7 +11,7 @@ from .agent import interpret
 from flask import Flask, jsonify, request, send_from_directory
 
 from .engines import Engine, EngineError, Result, SarvamEngine, WhisperEngine, default_chain
-from .greetings import GREETINGS, detect_greeting
+from .greetings import BETA, GREETINGS, detect_greeting, rank_by_followup
 from .router import AllEnginesFailed, transcribe
 
 app = Flask(__name__, static_folder="static")
@@ -52,6 +52,11 @@ def languages():
     return jsonify(sorted(GREETINGS))
 
 
+@app.get("/beta")
+def beta():
+    return jsonify(sorted(BETA))
+
+
 def to_wav(raw: bytes) -> str:
     src = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
     src.write(raw)
@@ -74,7 +79,9 @@ def do_transcribe():
             try:
                 first, first_log = transcribe(wav, "unknown", first_chain, timeout=8)
                 said = first.text
-                greeting_langs, _ = detect_greeting(said)
+                greeting_langs, rest = detect_greeting(said)
+                if greeting_langs:
+                    greeting_langs = rank_by_followup(greeting_langs, rest)
             except AllEnginesFailed as e:
                 first_log = e.attempts
             log += [("first pass: " + a, b) for a, b in first_log]

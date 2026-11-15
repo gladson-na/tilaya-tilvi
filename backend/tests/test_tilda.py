@@ -108,3 +108,20 @@ def test_agent_ignores_unsafe_llm_answer():
     from tilda.agent import interpret
     r = interpret("volume up", llm=lambda t: {"action": "delete_everything"})
     assert r["action"] == "volume_up"
+
+
+def test_neighbour_greetings_are_beta():
+    from tilda.greetings import BETA
+    for said, lang in [("Ayubowan Tilda", "si-LK"), ("Mingalaba Tilda", "my-MM"),
+                       ("Tashi Delek Tilda", "bo-CN"), ("Kuzuzangpo Tilda", "dz-BT")]:
+        cands, _ = detect_greeting(said)
+        assert cands and cands[0] == lang and lang in BETA
+
+
+def test_followup_words_pick_language_and_keep_hindi_english_standby():
+    from tilda.greetings import rank_by_followup
+    cands, rest = detect_greeting("Namaskar Tilda mala pahije")
+    ranked = rank_by_followup(cands, rest)
+    assert ranked[0] == "mr-IN" and ranked[-2:] == ["hi-IN", "en-IN"]
+    cands, rest = detect_greeting("Namaskaram Tilda enti ela")
+    assert rank_by_followup(cands, rest)[0] == "te-IN"

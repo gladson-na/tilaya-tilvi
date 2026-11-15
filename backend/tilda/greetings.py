@@ -33,7 +33,38 @@ GREETINGS = {
     "sat-IN": ["johar"],
     "mni-IN": ["khurumjari"],
     "brx-IN": ["khulumbai"],
+    # Neighbouring countries. BETA: thin training data, greetings unverified.
+    "ur-PK": ["assalam alaikum", "adaab"],
+    "ps-AF": ["salaam", "starey mashe"],
+    "bo-CN": ["tashi delek"],
+    "ne-NP": ["namaste"],
+    "dz-BT": ["kuzuzangpo", "kuzu zangpo"],
+    "si-LK": ["ayubowan"],
+    "my-MM": ["mingalaba"],
+    "bn-BD": ["assalamu alaikum", "nomoshkar"],
     "en-IN": ["hello", "hey", "hi"],
+}
+
+BETA = {"ur-PK", "ps-AF", "bo-CN", "ne-NP", "dz-BT", "si-LK", "my-MM", "bn-BD"}
+
+# Always kept on standby after the specific candidates: people mix Hindi and English.
+TAIL = ["hi-IN", "en-IN"]
+
+# A few common Roman-letter words per language. The words after the greeting and the
+# name vote for the language when the greeting is shared. UNVERIFIED, grow this list.
+MARKERS = {
+    "te-IN": "enti ela cheyyi naaku kavali undi ledu chesi cheppu",
+    "hi-IN": "kya hai mujhe karo kholo chahiye nahi batao",
+    "mr-IN": "kay ahe mala kara pahije sang",
+    "gu-IN": "shu che mane joiye kem kholo",
+    "bn-IN": "ki ami amar korbo koro ache lagbe",
+    "od-IN": "kana mu mora kara achhi",
+    "kn-IN": "yenu naanu beku maadi illa",
+    "ml-IN": "enthu njan venam cheyyu illa",
+    "ta-IN": "enna naan venum pannu illa",
+    "pa-IN": "mainu chahida karo haiga",
+    "ur-PK": "kya mujhe chahiye hai karo",
+    "ne-NP": "ke malai chahincha garnus hunchha",
 }
 
 # When a greeting is shared by several languages we try them in this order.
@@ -76,3 +107,15 @@ def detect_greeting(text: str, name: str = WAKE_NAME, cutoff: float = 0.8):
                 rest = rest[1:]
             return INDEX[match[0]], " ".join(rest)
     return None, text
+
+
+def rank_by_followup(candidates, rest: str):
+    """Greeting gave several possible languages; the words after the name pick the best.
+
+    Languages with more matching marker words go first, ties keep the original order.
+    Hindi and English are always appended as the last standby (people code-mix).
+    """
+    words = set(_norm(rest).split())
+    score = lambda l: len(words & set(MARKERS.get(l, "").split()))
+    ranked = sorted(candidates, key=lambda l: -score(l))
+    return ranked + [t for t in TAIL if t not in ranked]
