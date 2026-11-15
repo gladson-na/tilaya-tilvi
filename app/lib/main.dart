@@ -8,6 +8,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import 'offline_asr.dart';
+
 void main() => runApp(const TildaApp());
 
 class TildaApp extends StatelessWidget {
@@ -71,15 +73,21 @@ class _HomePageState extends State<HomePage> {
   Directory? _queue;
   int _sess = 0, _seq = 0, _downAt = 0;
   bool _recording = false, _flushing = false;
-  final _sessText = <int, String>{};
+  final _asr = OfflineAsr();
+  final _pieceText = <String, String>{}; // piece file name -> text
+  final _rough = <String>{}; // pieces whose text is still the rough offline guess
   final _sessLang = <int, String>{};
+  bool _online = true;
+  double? _dl; // model download progress
   String _text = '';
+  int _shownSess = 0;
   String _info = 'Say a greeting and the name first, e.g. "Namaskaram Tilda".';
 
   @override
   void initState() {
     super.initState();
     _retry = Timer.periodic(const Duration(seconds: 10), (_) => _flush());
+    _asr.check().then((_) => mounted ? setState(() {}) : null);
     _flush();
   }
 
@@ -109,7 +117,7 @@ class _HomePageState extends State<HomePage> {
     }
     _sess = DateTime.now().millisecondsSinceEpoch;
     _seq = 0;
-    _sessText[_sess] = '';
+    _shownSess = _sess;
     _buf.clear();
     final stream = await _recorder.startStream(
         const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1));
@@ -133,7 +141,21 @@ class _HomePageState extends State<HomePage> {
     await _flush();
   }
 
+  String _name(File f) => f.uri.pathSegments.last;
+
+  void _refreshText() {
+    final names = _pieceText.keys.where((n) => n.startsWith(_shownSess.toString().padLeft(14, '0'))).toList()..sort();
+    _text = names.map((n) => _pieceText[n]!).where((t) => t.isNotEmpty).join(' ');
+  }
+
+  static const _whisper = {
+    'hi-IN': 'hi', 'te-IN': 'te', 'ta-IN': 'ta', 'kn-IN': 'kn', 'ml-IN': 'ml', 'mr-IN': 'mr',
+    'gu-IN': 'gu', 'bn-IN': 'bn', 'pa-IN': 'pa', 'ur-IN': 'ur', 'ur-PK': 'ur', 'ne-IN': 'ne',
+    'ne-NP': 'ne', 'bn-BD': 'bn', 'ps-AF': 'ps', 'si-LK': 'si', 'my-MM': 'my', 'bo-CN': 'bo', 'en-IN': 'en',
+  };
+
   /// Send saved pieces in order. A piece is deleted only after the server answers.
+  /// While the network is down, pieces get a rough on-device transcript instead.
   Future<void> _flush() async {
     if (_flushing) return;
     _flushing = true;
@@ -141,35 +163,65 @@ class _HomePageState extends State<HomePage> {
       final d = await _dir();
       final files = d.listSync().whereType<File>().where((f) => f.path.endsWith('.wav')).toList()
         ..sort((a, b) => a.path.compareTo(b.path));
+      var netOk = true;
       for (final f in files) {
-        final sess = int.tryParse(f.uri.pathSegments.last.split('_').first) ?? 0;
-        try {
-          final req = http.MultipartRequest('POST', Uri.parse('${_url.text.trim()}/transcribe'))
-            ..fields['lang'] = _sessLang[sess] ?? 'auto'
-            ..files.add(await http.MultipartFile.fromPath('audio', f.path));
-          final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 45)));
-          final j = jsonDecode(res.body) as Map<String, dynamic>;
-          if (j['error'] != null) throw Exception(j['error']);
-          final lang = j['language'] as String?;
-          if (lang != null && lang != 'unknown' && !_sessLang.containsKey(sess)) _sessLang[sess] = lang;
-          await f.delete();
-          _sessText[sess] = '${_sessText[sess] ?? ''} ${j['text'] ?? ''}'.trim();
-          if (mounted) {
-            setState(() {
-              _text = _sessText[sess] ?? '';
-              _info = 'Engine: ${j['engine']}\nLanguage: ${j['language']}\nGreeting found: ${j['greeting_found']}';
-            });
+        final name = _name(f);
+        final sess = int.tryParse(name.split('_').first) ?? 0;
+        if (netOk) {
+          try {
+            final req = http.MultipartRequest('POST', Uri.parse('${_url.text.trim()}/transcribe'))
+              ..fields['lang'] = _sessLang[sess] ?? 'auto'
+              ..files.add(await http.MultipartFile.fromPath('audio', f.path));
+            final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 15)));
+            final j = jsonDecode(res.body) as Map<String, dynamic>;
+            if (j['error'] != null) throw Exception(j['error']);
+            final lang = j['language'] as String?;
+            if (lang != null && lang != 'unknown' && !_sessLang.containsKey(sess)) _sessLang[sess] = lang;
+            await f.delete();
+            _rough.remove(name);
+            _pieceText[name] = (j['text'] ?? '') as String;
+            _online = true;
+            if (mounted) {
+              setState(() {
+                _refreshText();
+                _info = 'Engine: ${j['engine']}\nLanguage: ${j['language']}\nGreeting found: ${j['greeting_found']}';
+              });
+            }
+            continue;
+          } catch (_) {
+            netOk = false;
+            _online = false;
           }
-        } catch (_) {
-          break; // no network or server asleep: keep the rest, retry later
+        }
+        // no network: rough on-device text so the words are visible right away
+        if (_asr.ready && !_pieceText.containsKey(name)) {
+          try {
+            final t = await _asr.transcribe(f.path, _whisper[_sessLang[sess]] ?? '');
+            _pieceText[name] = t;
+            _rough.add(name);
+            if (mounted) setState(_refreshText);
+          } catch (_) {}
         }
       }
       final left = d.listSync().where((f) => f.path.endsWith('.wav')).length;
       if (left > 0 && mounted) {
-        setState(() => _info = '${_recording ? 'Recording. ' : ''}No network: $left piece(s) saved on your phone, text will appear when it returns.');
+        setState(() => _info =
+            '${_recording ? 'Recording. ' : ''}No network: $left piece(s) saved on your phone. ${_asr.ready ? 'Showing a rough offline version; ' : ''}the real text replaces it when the network returns.');
       }
     } finally {
       _flushing = false;
+    }
+  }
+
+  Future<void> _downloadModel() async {
+    setState(() => _dl = 0);
+    try {
+      await _asr.download((p) => mounted ? setState(() => _dl = p) : null);
+      setState(() => _info = 'Offline model ready.');
+    } catch (e) {
+      setState(() => _info = 'Model download failed: $e');
+    } finally {
+      setState(() => _dl = null);
     }
   }
 
@@ -191,6 +243,16 @@ class _HomePageState extends State<HomePage> {
               controller: _url,
               decoration: const InputDecoration(labelText: 'Server address'),
             ),
+            if (!_asr.ready)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: OutlinedButton(
+                  onPressed: _dl == null ? _downloadModel : null,
+                  child: Text(_dl == null
+                      ? 'Download offline model (about 150 MB, once)'
+                      : 'Downloading ${(_dl! * 100).round()}%'),
+                ),
+              ),
             const SizedBox(height: 16),
             Listener(
               onPointerDown: (_) {
