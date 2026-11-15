@@ -5,7 +5,7 @@
 <style>
 body{font-family:system-ui,sans-serif;margin:0;padding:20px;max-width:560px;margin-inline:auto}
 button,select{font-size:18px;padding:12px;width:100%;margin:8px 0;border-radius:10px;border:1px solid #888}
-#rec{background:#0b6;color:#fff;border:0}#rec.on{background:#c22}
+#rec{background:#0b6;color:#fff;border:0;user-select:none;-webkit-user-select:none;touch-action:manipulation;-webkit-touch-callout:none}#rec.on{background:#c22}
 pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-size:14px}
 .big{font-size:22px;margin:12px 0}
 @media(prefers-color-scheme:dark){body{background:#111;color:#eee}pre{background:#222}select{background:#222;color:#eee}}
@@ -13,20 +13,29 @@ pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-
 <h2>Tilda test page</h2>
 <p>Say a greeting and the name first, e.g. "Namaskaram Tilda", then speak.</p>
 <select id="lang"><option value="auto">Auto (greeting, then detect)</option></select>
-<button id="rec">Hold to record</button>
+<button id="rec">Tap to start recording</button>
 <div class="big" id="text"></div>
 <pre id="log">Waiting.</pre>
 <script>
 const rec=document.getElementById('rec'),logEl=document.getElementById('log'),textEl=document.getElementById('text');
 fetch('languages').then(r=>r.json()).then(l=>l.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;document.getElementById('lang').append(o)}));
-let mr,chunks=[];
+let mr,chunks=[],timer,t0;
+rec.addEventListener('contextmenu',e=>e.preventDefault());
 async function start(){
-  const s=await navigator.mediaDevices.getUserMedia({audio:true});
+  let s;
+  try{s=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){logEl.textContent='Microphone blocked: allow it in the browser and try again.';return}
   mr=new MediaRecorder(s);chunks=[];
   mr.ondataavailable=e=>chunks.push(e.data);
-  mr.onstop=send;mr.start();rec.classList.add('on');rec.textContent='Recording... release to send';
+  mr.onstop=send;mr.start();t0=Date.now();rec.classList.add('on');
+  timer=setInterval(()=>{rec.textContent='Recording '+Math.round((Date.now()-t0)/1000)+'s - tap to stop and send'},250);
+  rec.textContent='Recording 0s - tap to stop and send';
 }
-function stop(){if(mr&&mr.state==='recording'){mr.stop();mr.stream.getTracks().forEach(t=>t.stop());rec.classList.remove('on');rec.textContent='Hold to record'}}
+function stop(){
+  clearInterval(timer);
+  if(mr&&mr.state==='recording'){mr.stop();mr.stream.getTracks().forEach(t=>t.stop())}
+  rec.classList.remove('on');rec.textContent='Tap to start recording';
+}
+rec.addEventListener('click',()=>{(mr&&mr.state==='recording')?stop():start()});
 async function send(){
   logEl.textContent='Working...';textEl.textContent='';
   const f=new FormData();f.append('audio',new Blob(chunks),'a.webm');f.append('lang',document.getElementById('lang').value);
@@ -34,8 +43,7 @@ async function send(){
     const r=await fetch('transcribe',{method:'POST',body:f});const j=await r.json();
     textEl.textContent=j.text||'';
     const lines=(j.log||[]).map(x=>x[0]+': '+x[1]);
-    logEl.textContent=(j.error?('FAILED: '+j.error+'\n'):('Engine used: '+j.engine+'\nLanguage: '+j.language+'\nGreeting found: '+j.greeting_found+'\nHeard first: '+j.heard_first+'\n'))+'\nTried:\n'+lines.join('\n');
+    logEl.textContent=(j.error?('FAILED: '+j.error+'\n'):('Engine used: '+j.engine+'\nLanguage: '+j.language+'\nGreeting found: '+j.greeting_found+'\nHeard first: '+j.heard_first+'\n'))+(j.action?('\nAction: '+j.action.action+' '+JSON.stringify(j.action.args)+(j.action.needs_yes?' (needs your yes)':'')+'\n'):'')+'\nTried:\n'+lines.join('\n');
   }catch(e){logEl.textContent='Error: '+e}
 }
-rec.addEventListener('pointerdown',start);rec.addEventListener('pointerup',stop);rec.addEventListener('pointerleave',stop);
 </script></body></html>
