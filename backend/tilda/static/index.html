@@ -5,7 +5,7 @@
 <style>
 body{font-family:system-ui,sans-serif;margin:0;padding:20px;max-width:560px;margin-inline:auto}
 button,select{font-size:18px;padding:12px;width:100%;margin:8px 0;border-radius:10px;border:1px solid #888}
-#rec{background:#0b6;color:#fff;border:0;user-select:none;-webkit-user-select:none;touch-action:manipulation;-webkit-touch-callout:none}#rec.on{background:#c22}
+#rec{background:#0b6;color:#fff;border:0;user-select:none;-webkit-user-select:none;touch-action:none;-webkit-touch-callout:none}#rec.on{background:#c22}
 pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-size:14px}
 .big{font-size:22px;margin:12px 0}
 @media(prefers-color-scheme:dark){body{background:#111;color:#eee}pre{background:#222}select{background:#222;color:#eee}}
@@ -13,29 +13,46 @@ pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-
 <h2>Tilda test page</h2>
 <p>Say a greeting and the name first, e.g. "Namaskaram Tilda", then speak.</p>
 <select id="lang"><option value="auto">Auto (greeting, then detect)</option></select>
-<button id="rec">Tap to start recording</button>
+<button id="rec">Tap or hold to record</button>
 <div class="big" id="text"></div>
 <pre id="log">Waiting.</pre>
 <script>
 const rec=document.getElementById('rec'),logEl=document.getElementById('log'),textEl=document.getElementById('text');
 fetch('languages').then(r=>r.json()).then(l=>l.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;document.getElementById('lang').append(o)}));
-let mr,chunks=[],timer,t0;
+let mr,chunks=[],timer,t0,downAt=0,starting=false,stopAfterStart=false;
+const HOLD_MS=450; // press longer than this = hold mode (release stops); shorter = tap mode (tap again stops)
 rec.addEventListener('contextmenu',e=>e.preventDefault());
+function recording(){return mr&&mr.state==='recording'}
 async function start(){
+  starting=true;stopAfterStart=false;
   let s;
-  try{s=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){logEl.textContent='Microphone blocked: allow it in the browser and try again.';return}
+  try{s=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){starting=false;logEl.textContent='Microphone blocked: allow it in the browser and try again.';return}
   mr=new MediaRecorder(s);chunks=[];
   mr.ondataavailable=e=>chunks.push(e.data);
-  mr.onstop=send;mr.start();t0=Date.now();rec.classList.add('on');
-  timer=setInterval(()=>{rec.textContent='Recording '+Math.round((Date.now()-t0)/1000)+'s - tap to stop and send'},250);
-  rec.textContent='Recording 0s - tap to stop and send';
+  mr.onstop=send;mr.start();t0=Date.now();starting=false;rec.classList.add('on');
+  timer=setInterval(()=>{rec.textContent='Recording '+Math.round((Date.now()-t0)/1000)+'s'},250);
+  rec.textContent='Recording 0s';
+  if(stopAfterStart)stop();
 }
 function stop(){
   clearInterval(timer);
-  if(mr&&mr.state==='recording'){mr.stop();mr.stream.getTracks().forEach(t=>t.stop())}
-  rec.classList.remove('on');rec.textContent='Tap to start recording';
+  if(recording()){mr.stop();mr.stream.getTracks().forEach(t=>t.stop())}
+  rec.classList.remove('on');rec.textContent='Tap or hold to record';
 }
-rec.addEventListener('click',()=>{(mr&&mr.state==='recording')?stop():start()});
+rec.addEventListener('pointerdown',e=>{
+  rec.setPointerCapture(e.pointerId);
+  if(recording()){stop();downAt=0;return}   // tap mode: second tap stops
+  downAt=Date.now();start();
+});
+function released(){
+  if(!downAt)return;                         // this press only stopped a tap-mode recording
+  const held=Date.now()-downAt>=HOLD_MS;
+  downAt=0;
+  if(!held)return;                           // quick tap: keep recording until the next tap
+  if(starting)stopAfterStart=true;else stop();
+}
+rec.addEventListener('pointerup',released);
+rec.addEventListener('pointercancel',released);
 async function send(){
   logEl.textContent='Working...';textEl.textContent='';
   const f=new FormData();f.append('audio',new Blob(chunks),'a.webm');f.append('lang',document.getElementById('lang').value);
