@@ -53,7 +53,7 @@ class SarvamEngine(Engine):
                 timeout=30,
             )
         if r.status_code != 200:
-            raise EngineError(f"sarvam http {r.status_code}")
+            raise EngineError(f"sarvam http {r.status_code}: {r.text[:240]}")
         return Result(r.json().get("transcript", ""), self.name)
 
 
