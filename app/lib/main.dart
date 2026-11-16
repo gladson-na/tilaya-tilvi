@@ -362,99 +362,48 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Tilda')),
-        body: Padding(
-          padding: const EdgeInsets.all(16),
-          child: ListView(children: [
-            TextField(
-              controller: _url,
-              decoration: const InputDecoration(labelText: 'Server address'),
-            ),
-            if (Platform.isAndroid)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: FilledButton.tonal(
-                  onPressed: _toggleBubble,
-                  child: Text(_bubbleOn ? 'Hide floating bubble' : 'Show floating bubble over other apps'),
+  void _openSettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(controller: _url, decoration: const InputDecoration(labelText: 'Server address')),
+              if (!_asr.ready)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: OutlinedButton(
+                    onPressed: _dl == null ? _downloadModel : null,
+                    child: Text(_dl == null
+                        ? 'Download offline model (about 150 MB, once)'
+                        : 'Downloading ${(_dl! * 100).round()}%'),
+                  ),
                 ),
-              ),
-            if (!_asr.ready)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: OutlinedButton(
-                  onPressed: _dl == null ? _downloadModel : null,
-                  child: Text(_dl == null
-                      ? 'Download offline model (about 150 MB, once)'
-                      : 'Downloading ${(_dl! * 100).round()}%'),
-                ),
-              ),
-            const SizedBox(height: 16),
-            Listener(
-              onPointerDown: (_) {
-                if (_recording) {
-                  _downAt = 0;
-                  _stop(); // tap mode: second tap stops
-                } else {
-                  _downAt = DateTime.now().millisecondsSinceEpoch;
-                  _start();
-                }
-              },
-              onPointerUp: (_) {
-                if (_downAt == 0) return;
-                final held = DateTime.now().millisecondsSinceEpoch - _downAt >= _holdMs;
-                _downAt = 0;
-                if (held) _stop(); // hold mode: release stops; a quick tap keeps recording
-              },
-              child: Container(
-                height: 96,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: _recording ? Colors.red : Colors.teal,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  _recording ? 'Recording... tap or release to stop' : 'Tap or hold to record',
-                  style: const TextStyle(color: Colors.white, fontSize: 20),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _textCtl,
-              focusNode: _textFocus,
-              maxLines: null,
-              style: Theme.of(context).textTheme.headlineSmall,
-              decoration: const InputDecoration(
-                  hintText: 'Your words appear here. Fix anything wrong and tap "Save my correction".',
-                  border: InputBorder.none),
-            ),
-            Row(children: [
-              FilledButton.tonal(
-                onPressed: () async {
-                  final n = await _style.learn(_text, _textCtl.text);
-                  if (_style.keepAudio) {
-                    final prefix = _shownSess.toString().padLeft(14, '0');
-                    for (final e in _kept.entries.where((e) => e.key.startsWith(prefix)).toList()) {
-                      await _style.addTrainingPiece(e.value, _style.apply(_pieceText[e.key] ?? ''));
-                      try {
-                        await e.value.delete();
-                      } catch (_) {}
-                      _kept.remove(e.key);
-                    }
-                  }
-                  _textFocus.unfocus();
-                  setState(() {
-                    _refreshText();
-                    _info = n > 0
-                        ? 'Learned $n correction(s). Kept only on this phone.'
-                        : 'Nothing new to learn from that edit.';
-                  });
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Send my word list as a hint'),
+                subtitle: Text('Your own names and words help the engines. Sent with each recording only, never stored. ${_style.vocab.length} word(s).'),
+                value: _style.shareHints,
+                onChanged: (v) async {
+                  setSheet(() => _style.shareHints = v);
+                  await _style.save();
+                  setState(() {});
                 },
-                child: const Text('Save my correction'),
               ),
-              const SizedBox(width: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Train a private model of my voice'),
+                subtitle: const Text('Keeps the recordings you review, only on this phone.'),
+                value: _style.keepAudio,
+                onChanged: (v) async {
+                  setSheet(() => _style.keepAudio = v);
+                  await _style.save();
+                  setState(() {});
+                },
+              ),
               TextButton(
                 onPressed: () async {
                   await _style.forget();
@@ -462,37 +411,125 @@ class _HomePageState extends State<HomePage> {
                     _refreshText();
                     _info = 'Forgot everything it learned about you.';
                   });
+                  if (ctx.mounted) Navigator.pop(ctx);
                 },
-                child: const Text('Forget all'),
+                child: const Text('Forget everything learned about me'),
               ),
             ]),
-            Text('Learned on this phone: ${_style.count} correction(s). Never sent anywhere.',
-                style: Theme.of(context).textTheme.bodySmall),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Send my word list as a hint'),
-              subtitle: Text('Your own names and words help the engines. Sent with each recording only, never stored. ${_style.vocab.length} word(s).'),
-              value: _style.shareHints,
-              onChanged: (v) async {
-                setState(() => _style.shareHints = v);
-                await _style.save();
-              },
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Train a private model of my voice'),
-              subtitle: Text(
-                  'Keeps the recordings you review, only on this phone. Collected: ${(_style.trainedSeconds / 60).toStringAsFixed(1)} of about 60 minutes needed to start.'),
-              value: _style.keepAudio,
-              onChanged: (v) async {
-                setState(() => _style.keepAudio = v);
-                await _style.save();
-              },
-            ),
-            LinearProgressIndicator(value: (_style.trainedSeconds / 3600).clamp(0.0, 1.0)),
-            const SizedBox(height: 12),
-            Text(_info),
-          ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One screen, no scrolling: everything a screenshot needs is visible at once.
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(
+          title: const Text('Tilda'),
+          actions: [IconButton(icon: const Icon(Icons.settings), onPressed: _openSettings)],
+        ),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Listener(
+                onPointerDown: (_) {
+                  if (_recording) {
+                    _downAt = 0;
+                    _stop(); // tap mode: second tap stops
+                  } else {
+                    _downAt = DateTime.now().millisecondsSinceEpoch;
+                    _start();
+                  }
+                },
+                onPointerUp: (_) {
+                  if (_downAt == 0) return;
+                  final held = DateTime.now().millisecondsSinceEpoch - _downAt >= _holdMs;
+                  _downAt = 0;
+                  if (held) _stop(); // hold mode: release stops; a quick tap keeps recording
+                },
+                child: Container(
+                  height: 84,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _recording ? Colors.red : Colors.teal,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Text(
+                    _recording ? 'Recording... tap or release to stop' : 'Tap or hold to record',
+                    style: const TextStyle(color: Colors.white, fontSize: 20),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _textCtl,
+                  focusNode: _textFocus,
+                  maxLines: null,
+                  expands: true,
+                  textAlignVertical: TextAlignVertical.top,
+                  style: Theme.of(context).textTheme.titleLarge,
+                  decoration: const InputDecoration(
+                      hintText: 'Your words appear here. Fix anything wrong, then tap "Save my correction".',
+                      border: OutlineInputBorder()),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: FilledButton.tonal(
+                    onPressed: () async {
+                      final n = await _style.learn(_text, _textCtl.text);
+                      if (_style.keepAudio) {
+                        final prefix = _shownSess.toString().padLeft(14, '0');
+                        for (final e in _kept.entries.where((e) => e.key.startsWith(prefix)).toList()) {
+                          await _style.addTrainingPiece(e.value, _style.apply(_pieceText[e.key] ?? ''));
+                          try {
+                            await e.value.delete();
+                          } catch (_) {}
+                          _kept.remove(e.key);
+                        }
+                      }
+                      _textFocus.unfocus();
+                      setState(() {
+                        _refreshText();
+                        _info = n > 0
+                            ? 'Learned $n correction(s). Kept only on this phone.'
+                            : 'Nothing new to learn from that edit.';
+                      });
+                    },
+                    child: const Text('Save my correction'),
+                  ),
+                ),
+                if (Platform.isAndroid) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.tonal(
+                      onPressed: _toggleBubble,
+                      child: Text(_bubbleOn ? 'Hide bubble' : 'Show bubble'),
+                    ),
+                  ),
+                ],
+              ]),
+              const SizedBox(height: 8),
+              Expanded(
+                flex: 2,
+                child: SingleChildScrollView(
+                  reverse: false,
+                  child: Text(
+                    '$_info\n\nLearned: ${_style.count} fix(es) · words: ${_style.vocab.length} · '
+                    'voice data: ${(_style.trainedSeconds / 60).toStringAsFixed(1)}/60 min · '
+                    'offline model: ${_asr.ready ? 'ready' : 'not downloaded'}'
+                    '${_dl != null ? ' (${(_dl! * 100).round()}%)' : ''}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+            ]),
+          ),
         ),
       );
 }
