@@ -7,7 +7,9 @@ against Sarvam's docs when we have the key.
 import difflib
 import re
 
-WAKE_NAME = "tilda"  # placeholder name, change in one place
+WAKE_NAME = "tilda"  # placeholder name, kept for old callers
+# Any of these after the greeting counts as calling the assistant. Final name undecided.
+WAKE_NAMES = ["tilda", "tilvi", "tilaya", "tilaya tilvi", "telvi", "tilvy", "thilvi"]
 
 # language code (BCP-47 style, Sarvam-like) -> greetings in Roman letters
 GREETINGS = {
@@ -42,8 +44,14 @@ GREETINGS = {
     "si-LK": ["ayubowan"],
     "my-MM": ["mingalaba"],
     "bn-BD": ["assalamu alaikum", "nomoshkar"],
-    "en-IN": ["hello", "hey", "hi"],
+    "en-IN": ["hello", "hey", "hi", "hallo", "helo", "hai", "good morning", "good evening"],
 }
+# Extra hello words that also open a session in the language family they belong to.
+GREETINGS["hi-IN"] += ["radhe radhe", "jai shri ram", "jai hind", "hello ji"]
+GREETINGS["te-IN"] += ["namaskaram andi", "baagunnara"]
+GREETINGS["ta-IN"] += ["vannakam", "vanakam"]
+GREETINGS["pa-IN"] += ["sat shri akal"]
+GREETINGS["bn-IN"] += ["nomoshkar"]
 
 BETA = {"ur-PK", "ps-AF", "bo-CN", "ne-NP", "dz-BT", "si-LK", "my-MM", "bn-BD"}
 
@@ -88,7 +96,7 @@ def _build_index():
 INDEX = _build_index()
 
 
-def detect_greeting(text: str, name: str = WAKE_NAME, cutoff: float = 0.8):
+def detect_greeting(text: str, name=None, cutoff: float = 0.8):
     """Return (candidate_languages, rest_of_text) or (None, text).
 
     Matching is fuzzy so different spellings of the same sound still work.
@@ -103,8 +111,13 @@ def detect_greeting(text: str, name: str = WAKE_NAME, cutoff: float = 0.8):
         match = difflib.get_close_matches(head, INDEX.keys(), n=1, cutoff=cutoff)
         if match:
             rest = words[n:]
-            if rest and difflib.SequenceMatcher(None, rest[0], name).ratio() >= 0.7:
-                rest = rest[1:]
+            names = [name] if name else WAKE_NAMES
+            # longest name first so "tilaya tilvi" is dropped as one call
+            for nm in sorted(names, key=lambda x: -len(x.split())):
+                k = len(nm.split())
+                if len(rest) >= k and difflib.SequenceMatcher(None, " ".join(rest[:k]), nm).ratio() >= 0.7:
+                    rest = rest[k:]
+                    break
             return INDEX[match[0]], " ".join(rest)
     return None, text
 

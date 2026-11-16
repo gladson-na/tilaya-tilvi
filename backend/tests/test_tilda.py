@@ -169,3 +169,11 @@ def test_translate_checks_languages_and_calls_sarvam(monkeypatch):
         tr.translate("hello", "en-IN", "ps-AF", api_key="k")  # Pashto is not covered by Sarvam
     with pytest.raises(tr.TranslateError):
         tr.translate("hello", "en-IN", "hi-IN")  # no key
+
+
+def test_new_wake_names_and_hellos():
+    for said, expect in [("Hello Tilvi open maps", "en-IN"), ("Namaskaram Tilvi enti ela", "te-IN"),
+                         ("Namaste Tilaya Tilvi kholo", "hi-IN"), ("Hello Telvi", "en-IN")]:
+        cands, rest = detect_greeting(said)
+        assert cands[0] == expect, said
+        assert "tilvi" not in rest and "tilaya" not in rest and "telvi" not in rest, rest
