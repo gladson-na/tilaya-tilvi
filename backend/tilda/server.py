@@ -13,6 +13,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from .engines import Engine, EngineError, Result, SarvamEngine, WhisperEngine, default_chain
 from .greetings import BETA, GREETINGS, detect_greeting, rank_by_followup
 from .router import AllEnginesFailed, transcribe
+from .translate import TranslateError, translate
 
 app = Flask(__name__, static_folder="static")
 
@@ -45,6 +46,18 @@ def index():
 @app.post("/act")
 def act():
     return jsonify(interpret((request.get_json(silent=True) or {}).get("text", "")))
+
+
+@app.post("/translate")
+def do_translate():
+    j = request.get_json(silent=True) or {}
+    text, source, target = j.get("text", ""), j.get("source", "auto"), j.get("target", "en-IN")
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(text=f"(demo translation to {target}) {text}", target=target)
+    try:
+        return jsonify(text=translate(text, source, target), target=target)
+    except TranslateError as e:
+        return jsonify(error=str(e)), 502
 
 
 @app.get("/languages")
