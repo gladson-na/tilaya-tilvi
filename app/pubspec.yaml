@@ -11,6 +11,7 @@ dependencies:
   record: ^6.0.0
   path_provider: ^2.1.0
   sherpa_onnx: ^1.12.14
+  flutter_overlay_window: ^0.4.4
 dev_dependencies:
   flutter_test:
     sdk: flutter
