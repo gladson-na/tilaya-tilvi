@@ -5,7 +5,5 @@ services:
     rootDir: backend
     plan: free
     envVars:
-      - key: TILDA_FAKE
-        value: "1"   # demo mode; delete this line once SARVAM_API_KEY is set
       - key: SARVAM_API_KEY
         sync: false
