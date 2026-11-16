@@ -71,6 +71,7 @@ def to_wav(raw: bytes) -> str:
 def do_transcribe():
     raw = request.files["audio"].read()
     forced = request.form.get("lang", "auto")  # "auto" = greeting then auto-detect
+    hints = request.form.get("hints", "")[:400]  # optional personal word list, used for this request only
     wav = to_wav(raw)
     first_chain, main_chain = chains()
     log, greeting_langs, said = [], None, ""
@@ -89,7 +90,7 @@ def do_transcribe():
         err = None
         for lang in langs:
             try:
-                res, main_log = transcribe(wav, lang, main_chain, timeout=8)
+                res, main_log = transcribe(wav, lang, main_chain, timeout=8, hints=hints)
                 log += main_log
                 return jsonify(text=res.text, engine=res.engine, language=lang,
                                greeting_found=bool(greeting_langs), heard_first=said, log=log,

@@ -22,6 +22,7 @@ class EngineError(Exception):
 class Engine:
     name = "base"
     langs: set[str] | None = None  # None = accepts any language code
+    accepts_hints = False  # True = transcribe(wav, lang, hints) can use the user's personal word list
 
     def supports(self, lang: str) -> bool:
         return self.langs is None or lang in self.langs
@@ -84,10 +85,12 @@ class IndicConformerEngine(Engine):
 class WhisperEngine(Engine):
     """Layer 3 and 4 (different sizes). Open Whisper through faster-whisper."""
 
+    accepts_hints = True
+
     def __init__(self, size: str = "large-v3", name: str = "whisper-large"):
         self.size, self.name, self._model = size, name, None
 
-    def transcribe(self, wav_path, lang):
+    def transcribe(self, wav_path, lang, hints=""):
         try:
             from faster_whisper import WhisperModel
         except ImportError:
@@ -95,7 +98,10 @@ class WhisperEngine(Engine):
         if self._model is None:
             self._model = WhisperModel(self.size, compute_type="int8")
         code = lang.split("-")[0].replace("od", "or")
-        segs, info = self._model.transcribe(wav_path, language=None if lang == "unknown" else code)
+        # Whisper reads the initial prompt as "text that came just before", so the user's own
+        # names and words become more likely. Used for this request only, never stored.
+        segs, info = self._model.transcribe(wav_path, language=None if lang == "unknown" else code,
+                                            initial_prompt=hints or None)
         return Result(" ".join(s.text.strip() for s in segs), self.name, getattr(info, "language_probability", None))
 
 
