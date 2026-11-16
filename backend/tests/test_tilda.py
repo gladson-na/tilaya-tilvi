@@ -142,3 +142,30 @@ def test_hints_reach_only_engines_that_accept_them():
     assert res.text  # a plain engine still works when hints are given
     transcribe("x.wav", "hi-IN", [Hinted("h", "ok")], hints="Gladson, Tilaya")
     assert seen["hints"] == "Gladson, Tilaya"
+
+
+def test_translate_checks_languages_and_calls_sarvam(monkeypatch):
+    import pytest
+    from tilda import translate as tr
+
+    seen = {}
+
+    class R:
+        status_code = 200
+
+        def json(self):
+            return {"translated_text": "namaste"}
+
+    def fake_post(url, headers, json, timeout):
+        seen.update(json)
+        return R()
+
+    monkeypatch.setattr(tr.requests, "post", fake_post)
+    assert tr.translate("hello", "en-IN", "hi-IN", api_key="k") == "namaste"
+    assert seen["model"] == "sarvam-translate:v1"
+    tr.translate("hello", "auto", "hi-IN", api_key="k")
+    assert seen["model"] == "mayura:v1"
+    with pytest.raises(tr.TranslateError):
+        tr.translate("hello", "en-IN", "ps-AF", api_key="k")  # Pashto is not covered by Sarvam
+    with pytest.raises(tr.TranslateError):
+        tr.translate("hello", "en-IN", "hi-IN")  # no key

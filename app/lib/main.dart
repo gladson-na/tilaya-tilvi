@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -118,6 +119,15 @@ Uint8List _wav(Uint8List pcm) {
   return Uint8List.fromList([...h.buffer.asUint8List(), ...pcm]);
 }
 
+/// Languages the translator can write into (Sarvam covers the 22 official languages plus English).
+const _targets = {
+  'en-IN': 'English', 'hi-IN': 'Hindi', 'te-IN': 'Telugu', 'ta-IN': 'Tamil', 'kn-IN': 'Kannada',
+  'ml-IN': 'Malayalam', 'mr-IN': 'Marathi', 'gu-IN': 'Gujarati', 'bn-IN': 'Bengali', 'pa-IN': 'Punjabi',
+  'od-IN': 'Odia', 'as-IN': 'Assamese', 'ur-IN': 'Urdu', 'ne-IN': 'Nepali', 'kok-IN': 'Konkani',
+  'mai-IN': 'Maithili', 'doi-IN': 'Dogri', 'ks-IN': 'Kashmiri', 'sd-IN': 'Sindhi', 'sa-IN': 'Sanskrit',
+  'sat-IN': 'Santali', 'mni-IN': 'Manipuri', 'brx-IN': 'Bodo',
+};
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -136,6 +146,10 @@ class _HomePageState extends State<HomePage> {
   bool _recording = false, _flushing = false;
   final _asr = OfflineAsr();
   final _style = PersonalStyle();
+  final _tts = FlutterTts();
+  String _target = 'en-IN';
+  String _translation = '';
+  bool _translating = false;
   final _textCtl = TextEditingController();
   final _textFocus = FocusNode();
   final _pieceText = <String, String>{}; // piece file name -> text
@@ -221,6 +235,40 @@ class _HomePageState extends State<HomePage> {
     _tellBubble('working');
     setState(() => _recording = false);
     await _flush();
+  }
+
+  /// Translates what is in the text box into the chosen language, using the server.
+  Future<void> _translate() async {
+    final text = _textCtl.text.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      _translating = true;
+      _translation = '';
+    });
+    try {
+      final res = await http
+          .post(Uri.parse('${_url.text.trim()}/translate'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'text': text, 'source': _sessLang[_shownSess] ?? 'auto', 'target': _target}))
+          .timeout(const Duration(seconds: 25));
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      setState(() => _translation = j['error'] != null ? 'Could not translate: ${j['error']}' : (j['text'] ?? '') as String);
+    } catch (e) {
+      setState(() => _translation = 'No network, so no translation right now. Your words are safe.');
+    } finally {
+      setState(() => _translating = false);
+    }
+  }
+
+  /// Reads the translation aloud so the other person can hear it (needs that language's voice on the phone).
+  Future<void> _speak() async {
+    if (_translation.isEmpty) return;
+    try {
+      await _tts.setLanguage(_target);
+      await _tts.speak(_translation);
+    } catch (_) {
+      setState(() => _info = 'This phone has no voice for ${_targets[_target]}. Install it in Android text-to-speech settings.');
+    }
   }
 
   void _tellBubble(String state) {
@@ -515,6 +563,29 @@ class _HomePageState extends State<HomePage> {
                 ],
               ]),
               const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: _target,
+                    items: [
+                      for (final e in _targets.entries) DropdownMenuItem(value: e.key, child: Text('Translate to ${e.value}'))
+                    ],
+                    onChanged: (v) => setState(() => _target = v ?? _target),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: _translating ? null : _translate, child: Text(_translating ? '...' : 'Translate')),
+                IconButton(icon: const Icon(Icons.volume_up), onPressed: _speak),
+              ]),
+              Expanded(
+                flex: 2,
+                child: SingleChildScrollView(
+                  child: Text(_translation.isEmpty ? 'The translation appears here.' : _translation,
+                      style: Theme.of(context).textTheme.titleMedium),
+                ),
+              ),
+              const Divider(height: 8),
               Expanded(
                 flex: 2,
                 child: SingleChildScrollView(
