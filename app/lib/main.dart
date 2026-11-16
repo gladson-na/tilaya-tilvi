@@ -144,6 +144,7 @@ class _HomePageState extends State<HomePage> {
   Directory? _queue;
   int _sess = 0, _seq = 0, _downAt = 0;
   bool _recording = false, _flushing = false;
+  String _lastErr = '';  // why the last upload failed, shown instead of a vague 'no network'
   final _asr = OfflineAsr();
   final _style = PersonalStyle();
   final _tts = FlutterTts();
@@ -334,9 +335,15 @@ class _HomePageState extends State<HomePage> {
               ..fields['lang'] = _sessLang[sess] ?? 'auto'
               ..fields.addAll(_style.hints().isEmpty ? {} : {'hints': _style.hints()})
               ..files.add(await http.MultipartFile.fromPath('audio', f.path));
-            final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 15)));
-            final j = jsonDecode(res.body) as Map<String, dynamic>;
-            if (j['error'] != null) throw Exception(j['error']);
+            final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 70)));
+            Map<String, dynamic> j;
+            try {
+              j = jsonDecode(res.body) as Map<String, dynamic>;
+            } catch (_) {
+              throw Exception('server answered ${res.statusCode}: ${res.body.length > 160 ? res.body.substring(0, 160) : res.body}');
+            }
+            if (j['error'] != null) throw Exception('${j['error']} ${j['log'] ?? ''}');
+            _lastErr = '';
             final lang = j['language'] as String?;
             if (lang != null && lang != 'unknown' && !_sessLang.containsKey(sess)) _sessLang[sess] = lang;
             if (_style.keepAudio) {
@@ -356,9 +363,10 @@ class _HomePageState extends State<HomePage> {
               });
             }
             continue;
-          } catch (_) {
+          } catch (e) {
             netOk = false;
             _online = false;
+            _lastErr = e.toString().replaceFirst('Exception: ', '');
           }
         }
         // no network: rough on-device text so the words are visible right away
@@ -381,7 +389,7 @@ class _HomePageState extends State<HomePage> {
       }
       if (left > 0 && mounted) {
         setState(() => _info =
-            '${_recording ? 'Recording. ' : ''}No network: $left piece(s) saved on your phone. ${_asr.ready ? 'Showing a rough offline version; ' : ''}the real text replaces it when the network returns.');
+            '${_recording ? 'Recording. ' : ''}$left piece(s) saved on your phone, will retry. ${_asr.ready ? 'Showing a rough offline version. ' : ''}Last problem: ${_lastErr.isEmpty ? 'none yet' : _lastErr}');
       }
     } finally {
       _flushing = false;

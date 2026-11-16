@@ -111,6 +111,7 @@ def do_transcribe():
             except AllEnginesFailed as e:
                 log += e.attempts
                 err = e
+        app.logger.error("every engine failed: %s", log)
         return jsonify(error="every engine failed", log=log), 502
     finally:
         os.unlink(wav)
