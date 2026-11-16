@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -12,6 +14,64 @@ import 'offline_asr.dart';
 import 'personal_style.dart';
 
 void main() => runApp(const TildaApp());
+
+/// Entry point for the floating bubble that sits over other apps (Android only).
+/// It only draws the button; the main app records and transcribes.
+@pragma('vm:entry-point')
+void overlayMain() {
+  runApp(const MaterialApp(debugShowCheckedModeBanner: false, home: _Bubble()));
+}
+
+class _Bubble extends StatefulWidget {
+  const _Bubble();
+
+  @override
+  State<_Bubble> createState() => _BubbleState();
+}
+
+class _BubbleState extends State<_Bubble> {
+  String _state = 'idle'; // idle, recording, working, done
+
+  @override
+  void initState() {
+    super.initState();
+    FlutterOverlayWindow.overlayListener.listen((e) {
+      if (e is Map && e['state'] is String) setState(() => _state = e['state'] as String);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = {
+          'recording': Colors.red,
+          'working': Colors.amber,
+          'done': Colors.green,
+        }[_state] ??
+        Colors.teal;
+    final icon = {
+          'recording': Icons.stop,
+          'working': Icons.hourglass_top,
+          'done': Icons.check,
+        }[_state] ??
+        Icons.graphic_eq;
+    return Material(
+      color: Colors.transparent,
+      child: Center(
+        child: GestureDetector(
+          onTap: () => FlutterOverlayWindow.shareData({'cmd': 'toggle'}),
+          child: Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle, boxShadow: const [
+              BoxShadow(blurRadius: 8, color: Colors.black38),
+            ]),
+            child: Icon(icon, color: Colors.white, size: 32),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class TildaApp extends StatelessWidget {
   const TildaApp({super.key});
@@ -83,6 +143,8 @@ class _HomePageState extends State<HomePage> {
   final _rough = <String>{}; // pieces whose text is still the rough offline guess
   final _sessLang = <int, String>{};
   bool _online = true;
+  bool _bubbleSession = false; // this recording was started from the floating bubble
+  bool _bubbleOn = false;
   double? _dl; // model download progress
   String _text = '';
   int _shownSess = 0;
@@ -92,6 +154,18 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _retry = Timer.periodic(const Duration(seconds: 10), (_) => _flush());
+    if (Platform.isAndroid) {
+      FlutterOverlayWindow.overlayListener.listen((e) {
+        if (e is Map && e['cmd'] == 'toggle') {
+          if (_recording) {
+            _stop();
+          } else {
+            _bubbleSession = true;
+            _start();
+          }
+        }
+      });
+    }
     _style.load().then((_) => mounted ? setState(() {}) : null);
     _asr.check().then((_) => mounted ? setState(() {}) : null);
     _flush();
@@ -131,6 +205,7 @@ class _HomePageState extends State<HomePage> {
       _buf.add(chunk);
       if (_buf.length >= _pieceSeconds * _bytesPerSecond) _savePiece();
     });
+    _tellBubble('recording');
     setState(() {
       _recording = true;
       _text = '';
@@ -143,8 +218,39 @@ class _HomePageState extends State<HomePage> {
     await _recorder.stop();
     await _sub?.cancel();
     await _savePiece();
+    _tellBubble('working');
     setState(() => _recording = false);
     await _flush();
+  }
+
+  void _tellBubble(String state) {
+    if (_bubbleOn && Platform.isAndroid) FlutterOverlayWindow.shareData({'state': state});
+  }
+
+  Future<void> _toggleBubble() async {
+    if (_bubbleOn) {
+      await FlutterOverlayWindow.closeOverlay();
+      setState(() => _bubbleOn = false);
+      return;
+    }
+    if (!await FlutterOverlayWindow.isPermissionGranted()) {
+      await FlutterOverlayWindow.requestPermission();
+      setState(() => _info = 'Allow "Display over other apps" for Tilda, come back, and tap the button again.');
+      return;
+    }
+    await FlutterOverlayWindow.showOverlay(
+      height: 200,
+      width: 200,
+      alignment: OverlayAlignment.centerRight,
+      enableDrag: true,
+      positionGravity: PositionGravity.auto,
+      overlayTitle: 'Tilda is ready',
+      overlayContent: 'Tap the bubble to speak',
+    );
+    setState(() {
+      _bubbleOn = true;
+      _info = 'Bubble is on. Open any app, tap the bubble, speak, tap again. The text is copied: paste it.';
+    });
   }
 
   String _name(File f) => f.uri.pathSegments.last;
@@ -218,6 +324,13 @@ class _HomePageState extends State<HomePage> {
         }
       }
       final left = d.listSync().where((f) => f.path.endsWith('.wav')).length;
+      if (_bubbleSession && !_recording && left == 0 && _text.isNotEmpty) {
+        // started from the bubble: put the finished text on the clipboard, ready to paste
+        _bubbleSession = false;
+        await Clipboard.setData(ClipboardData(text: _text));
+        _tellBubble('done');
+        Future.delayed(const Duration(seconds: 3), () => _tellBubble('idle'));
+      }
       if (left > 0 && mounted) {
         setState(() => _info =
             '${_recording ? 'Recording. ' : ''}No network: $left piece(s) saved on your phone. ${_asr.ready ? 'Showing a rough offline version; ' : ''}the real text replaces it when the network returns.');
@@ -259,6 +372,14 @@ class _HomePageState extends State<HomePage> {
               controller: _url,
               decoration: const InputDecoration(labelText: 'Server address'),
             ),
+            if (Platform.isAndroid)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: FilledButton.tonal(
+                  onPressed: _toggleBubble,
+                  child: Text(_bubbleOn ? 'Hide floating bubble' : 'Show floating bubble over other apps'),
+                ),
+              ),
             if (!_asr.ready)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
