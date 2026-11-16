@@ -125,3 +125,20 @@ def test_followup_words_pick_language_and_keep_hindi_english_standby():
     assert ranked[0] == "mr-IN" and ranked[-2:] == ["hi-IN", "en-IN"]
     cands, rest = detect_greeting("Namaskaram Tilda enti ela")
     assert rank_by_followup(cands, rest)[0] == "te-IN"
+
+
+def test_hints_reach_only_engines_that_accept_them():
+    seen = {}
+
+    class Hinted(Fake):
+        accepts_hints = True
+
+        def transcribe(self, wav, lang, hints=""):
+            seen["hints"] = hints
+            return Result("ok", self.name)
+
+    plain = Fake("plain", "ok")
+    res, _ = transcribe("x.wav", "hi-IN", [plain], hints="Gladson, Tilaya")
+    assert res.text  # a plain engine still works when hints are given
+    transcribe("x.wav", "hi-IN", [Hinted("h", "ok")], hints="Gladson, Tilaya")
+    assert seen["hints"] == "Gladson, Tilaya"

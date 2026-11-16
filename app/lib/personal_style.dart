@@ -8,7 +8,12 @@ import 'package:path_provider/path_provider.dart';
 /// this device: nothing here is ever sent to the server.
 class PersonalStyle {
   final Map<String, String> fixes = {}; // lower-case heard text -> what the user meant
+  final Set<String> vocab = {}; // the user's own words and names (what they corrected to)
+  bool shareHints = false; // send the word list as a hint with each recording (off by default)
+  bool keepAudio = false; // keep reviewed recordings on this phone for later personal training (off by default)
+  double trainedSeconds = 0; // reviewed speech collected so far
   File? _file;
+  Directory? _dataDir;
 
   int get count => fixes.length;
 
@@ -26,19 +31,78 @@ class PersonalStyle {
       fixes
         ..clear()
         ..addAll((j['fixes'] as Map<String, dynamic>).map((k, v) => MapEntry(k, v as String)));
+      vocab
+        ..clear()
+        ..addAll(((j['vocab'] ?? []) as List).cast<String>());
+      shareHints = j['shareHints'] == true;
+      keepAudio = j['keepAudio'] == true;
+      trainedSeconds = ((j['trainedSeconds'] ?? 0) as num).toDouble();
     } catch (_) {}
   }
 
-  Future<void> _save() async {
+  Future<void> save() async {
     final f = await _f();
-    await f.writeAsString(jsonEncode({'fixes': fixes}), flush: true);
+    await f.writeAsString(
+        jsonEncode({
+          'fixes': fixes,
+          'vocab': vocab.toList(),
+          'shareHints': shareHints,
+          'keepAudio': keepAudio,
+          'trainedSeconds': trainedSeconds,
+        }),
+        flush: true);
+  }
+
+  /// Short comma-separated word list for the speech engines. Empty unless the user allowed it.
+  String hints() {
+    if (!shareHints || vocab.isEmpty) return '';
+    final out = <String>[];
+    var len = 0;
+    for (final w in vocab.toList().reversed) {
+      if (len + w.length > 380) break;
+      out.add(w);
+      len += w.length + 2;
+    }
+    return out.join(', ');
+  }
+
+  Future<Directory> dataDir() async {
+    if (_dataDir != null) return _dataDir!;
+    final d = await getApplicationDocumentsDirectory();
+    return _dataDir = await Directory('${d.path}/personal_data/audio').create(recursive: true);
+  }
+
+  /// Keeps a reviewed recording and its text, only on this phone, for later private training.
+  /// Skips a piece that is already stored.
+  Future<void> addTrainingPiece(File wav, String text) async {
+    if (text.trim().isEmpty) return;
+    final dir = await dataDir();
+    final name = wav.uri.pathSegments.last;
+    final manifest = File('${dir.parent.path}/manifest.jsonl');
+    final seen = manifest.existsSync() ? await manifest.readAsString() : '';
+    if (seen.contains('"audio":"audio/$name"')) return;
+    final seconds = (await wav.length() - 44) / 32000.0;
+    final target = File('${dir.path}/$name');
+    if (wav.path != target.path) await wav.copy(target.path);
+    await manifest.writeAsString(
+        '${jsonEncode({'audio': 'audio/$name', 'text': text, 'seconds': seconds})}\n',
+        mode: FileMode.append,
+        flush: true);
+    trainedSeconds += seconds;
+    await save();
   }
 
   /// Delete everything that was learned.
   Future<void> forget() async {
     fixes.clear();
+    vocab.clear();
+    trainedSeconds = 0;
     final f = await _f();
     if (f.existsSync()) await f.delete();
+    final d = await getApplicationDocumentsDirectory();
+    final data = Directory('${d.path}/personal_data');
+    if (data.existsSync()) await data.delete(recursive: true);
+    _dataDir = null;
   }
 
   static final _edge = RegExp(r'^[\p{P}\p{S}]+|[\p{P}\p{S}]+$', unicode: true);
@@ -116,7 +180,7 @@ class PersonalStyle {
         learned += _remember(wrong.map(_core).join(' '), right.map((w) => w.replaceAll(_edge, '')).join(' '));
       }
     }
-    if (learned > 0) await _save();
+    if (learned > 0) await save();
     return learned;
   }
 
@@ -125,6 +189,7 @@ class PersonalStyle {
     if (fixes.length >= 2000 && !fixes.containsKey(heard)) return 0;
     final isNew = fixes[heard] != meant;
     fixes[heard] = meant;
+    if (meant.length > 1) vocab.add(meant);
     return isNew ? 1 : 0;
   }
 }

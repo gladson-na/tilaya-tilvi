@@ -13,14 +13,15 @@ class AllEnginesFailed(Exception):
         self.attempts = attempts
 
 
-def transcribe(wav_path: str, lang: str, chain: list[Engine] | None = None, timeout: float = 8.0):
+def transcribe(wav_path: str, lang: str, chain: list[Engine] | None = None, timeout: float = 8.0, hints: str = ""):
     """Return (Result, attempts). attempts is a list of (engine, outcome) for the demo log."""
     attempts = []
     for eng in chain or default_chain():
         if not eng.supports(lang):
             attempts.append((eng.name, "skipped: language not supported"))
             continue
-        fut = _pool.submit(eng.transcribe, wav_path, lang)
+        args = (wav_path, lang, hints) if (hints and getattr(eng, "accepts_hints", False)) else (wav_path, lang)
+        fut = _pool.submit(eng.transcribe, *args)
         try:
             res: Result = fut.result(timeout=timeout)
         except FutTimeout:

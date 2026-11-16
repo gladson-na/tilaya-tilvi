@@ -79,6 +79,7 @@ class _HomePageState extends State<HomePage> {
   final _textCtl = TextEditingController();
   final _textFocus = FocusNode();
   final _pieceText = <String, String>{}; // piece file name -> text
+  final _kept = <String, File>{}; // pieces held for personal training until you review them
   final _rough = <String>{}; // pieces whose text is still the rough offline guess
   final _sessLang = <int, String>{};
   bool _online = true;
@@ -177,12 +178,19 @@ class _HomePageState extends State<HomePage> {
           try {
             final req = http.MultipartRequest('POST', Uri.parse('${_url.text.trim()}/transcribe'))
               ..fields['lang'] = _sessLang[sess] ?? 'auto'
+              ..fields.addAll(_style.hints().isEmpty ? {} : {'hints': _style.hints()})
               ..files.add(await http.MultipartFile.fromPath('audio', f.path));
             final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 15)));
             final j = jsonDecode(res.body) as Map<String, dynamic>;
             if (j['error'] != null) throw Exception(j['error']);
             final lang = j['language'] as String?;
             if (lang != null && lang != 'unknown' && !_sessLang.containsKey(sess)) _sessLang[sess] = lang;
+            if (_style.keepAudio) {
+              // held on the phone until you review the text and tap "Save my correction"
+              final keep = File('${d.path}/../kept_$name');
+              await f.copy(keep.path);
+              _kept[name] = keep;
+            }
             await f.delete();
             _rough.remove(name);
             _pieceText[name] = (j['text'] ?? '') as String;
@@ -305,6 +313,16 @@ class _HomePageState extends State<HomePage> {
               FilledButton.tonal(
                 onPressed: () async {
                   final n = await _style.learn(_text, _textCtl.text);
+                  if (_style.keepAudio) {
+                    final prefix = _shownSess.toString().padLeft(14, '0');
+                    for (final e in _kept.entries.where((e) => e.key.startsWith(prefix)).toList()) {
+                      await _style.addTrainingPiece(e.value, _style.apply(_pieceText[e.key] ?? ''));
+                      try {
+                        await e.value.delete();
+                      } catch (_) {}
+                      _kept.remove(e.key);
+                    }
+                  }
                   _textFocus.unfocus();
                   setState(() {
                     _refreshText();
@@ -329,6 +347,28 @@ class _HomePageState extends State<HomePage> {
             ]),
             Text('Learned on this phone: ${_style.count} correction(s). Never sent anywhere.',
                 style: Theme.of(context).textTheme.bodySmall),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Send my word list as a hint'),
+              subtitle: Text('Your own names and words help the engines. Sent with each recording only, never stored. ${_style.vocab.length} word(s).'),
+              value: _style.shareHints,
+              onChanged: (v) async {
+                setState(() => _style.shareHints = v);
+                await _style.save();
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Train a private model of my voice'),
+              subtitle: Text(
+                  'Keeps the recordings you review, only on this phone. Collected: ${(_style.trainedSeconds / 60).toStringAsFixed(1)} of about 60 minutes needed to start.'),
+              value: _style.keepAudio,
+              onChanged: (v) async {
+                setState(() => _style.keepAudio = v);
+                await _style.save();
+              },
+            ),
+            LinearProgressIndicator(value: (_style.trainedSeconds / 3600).clamp(0.0, 1.0)),
             const SizedBox(height: 12),
             Text(_info),
           ]),
