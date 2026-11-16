@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import 'offline_asr.dart';
+import 'personal_style.dart';
 
 void main() => runApp(const TildaApp());
 
@@ -74,6 +75,9 @@ class _HomePageState extends State<HomePage> {
   int _sess = 0, _seq = 0, _downAt = 0;
   bool _recording = false, _flushing = false;
   final _asr = OfflineAsr();
+  final _style = PersonalStyle();
+  final _textCtl = TextEditingController();
+  final _textFocus = FocusNode();
   final _pieceText = <String, String>{}; // piece file name -> text
   final _rough = <String>{}; // pieces whose text is still the rough offline guess
   final _sessLang = <int, String>{};
@@ -87,6 +91,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _retry = Timer.periodic(const Duration(seconds: 10), (_) => _flush());
+    _style.load().then((_) => mounted ? setState(() {}) : null);
     _asr.check().then((_) => mounted ? setState(() {}) : null);
     _flush();
   }
@@ -145,7 +150,8 @@ class _HomePageState extends State<HomePage> {
 
   void _refreshText() {
     final names = _pieceText.keys.where((n) => n.startsWith(_shownSess.toString().padLeft(14, '0'))).toList()..sort();
-    _text = names.map((n) => _pieceText[n]!).where((t) => t.isNotEmpty).join(' ');
+    _text = _style.apply(names.map((n) => _pieceText[n]!).where((t) => t.isNotEmpty).join(' '));
+    if (!_textFocus.hasFocus) _textCtl.text = _text;
   }
 
   static const _whisper = {
@@ -229,6 +235,8 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _retry?.cancel();
     _recorder.dispose();
+    _textCtl.dispose();
+    _textFocus.dispose();
     _url.dispose();
     super.dispose();
   }
@@ -284,7 +292,43 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             const SizedBox(height: 16),
-            Text(_text, style: Theme.of(context).textTheme.headlineSmall),
+            TextField(
+              controller: _textCtl,
+              focusNode: _textFocus,
+              maxLines: null,
+              style: Theme.of(context).textTheme.headlineSmall,
+              decoration: const InputDecoration(
+                  hintText: 'Your words appear here. Fix anything wrong and tap "Save my correction".',
+                  border: InputBorder.none),
+            ),
+            Row(children: [
+              FilledButton.tonal(
+                onPressed: () async {
+                  final n = await _style.learn(_text, _textCtl.text);
+                  _textFocus.unfocus();
+                  setState(() {
+                    _refreshText();
+                    _info = n > 0
+                        ? 'Learned $n correction(s). Kept only on this phone.'
+                        : 'Nothing new to learn from that edit.';
+                  });
+                },
+                child: const Text('Save my correction'),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () async {
+                  await _style.forget();
+                  setState(() {
+                    _refreshText();
+                    _info = 'Forgot everything it learned about you.';
+                  });
+                },
+                child: const Text('Forget all'),
+              ),
+            ]),
+            Text('Learned on this phone: ${_style.count} correction(s). Never sent anywhere.',
+                style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 12),
             Text(_info),
           ]),
