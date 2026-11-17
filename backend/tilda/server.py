@@ -84,6 +84,7 @@ def to_wav(raw: bytes) -> str:
 def do_transcribe():
     raw = request.files["audio"].read()
     forced = request.form.get("lang", "auto")  # "auto" = greeting then auto-detect
+    mine = [x for x in request.form.get("mine", "").split(",") if x][:12]  # the user's own languages
     hints = request.form.get("hints", "")[:400]  # optional personal word list, used for this request only
     wav = to_wav(raw)
     first_chain, main_chain = chains()
@@ -96,6 +97,8 @@ def do_transcribe():
                 greeting_langs, rest = detect_greeting(said)
                 if greeting_langs:
                     greeting_langs = rank_by_followup(greeting_langs, rest)
+                    # the user's own languages first (stable sort keeps the greeting order inside each group)
+                    greeting_langs = sorted(greeting_langs, key=lambda l: l not in mine)
             except AllEnginesFailed as e:
                 first_log = e.attempts
             log += [("first pass: " + a, b) for a, b in first_log]
@@ -105,6 +108,11 @@ def do_transcribe():
             try:
                 res, main_log = transcribe(wav, lang, main_chain, timeout=8, hints=hints)
                 log += main_log
+                if lang == "unknown" and mine and res.language not in mine:
+                    # auto-detect picked a language the user does not speak: use their first one
+                    lang = mine[0]
+                    res, main_log = transcribe(wav, lang, main_chain, timeout=8, hints=hints)
+                    log += main_log
                 return jsonify(text=res.text, engine=res.engine, language=lang,
                                greeting_found=bool(greeting_langs), heard_first=said, log=log,
                                action=interpret(res.text))

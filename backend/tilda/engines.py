@@ -13,6 +13,7 @@ class Result:
     text: str
     engine: str
     confidence: float | None = None
+    language: str | None = None  # language the engine says it heard, when it tells us
 
 
 class EngineError(Exception):
@@ -54,7 +55,8 @@ class SarvamEngine(Engine):
             )
         if r.status_code != 200:
             raise EngineError(f"sarvam http {r.status_code}: {r.text[:240]}")
-        return Result(r.json().get("transcript", ""), self.name)
+        j = r.json()
+        return Result(j.get("transcript", ""), self.name, language=j.get("language_code"))
 
 
 class IndicConformerEngine(Engine):
