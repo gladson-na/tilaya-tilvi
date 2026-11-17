@@ -5,7 +5,7 @@ Sarvam codes other than the 11 big languages are assumed and must be checked
 against Sarvam's docs when we have the key.
 """
 import difflib
-import re
+import unicodedata
 
 WAKE_NAME = "tilda"  # placeholder name, kept for old callers
 # Any of these after the greeting counts as calling the assistant. Final name undecided.
@@ -80,7 +80,26 @@ PRIORITY = ["hi-IN", "te-IN", "ta-IN", "kn-IN", "ml-IN", "mr-IN", "bn-IN", "gu-I
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"[^a-z ]", "", text.lower()).strip()
+    """Lowercase, drop punctuation and symbols, keep letters and marks of every script."""
+    kept = "".join(c for c in text.lower() if c == " " or unicodedata.category(c)[0] in "LMN")
+    return " ".join(kept.split())
+
+
+# The same greetings and names as they come back in native script (Sarvam answers in it).
+GREETINGS["hi-IN"] += ["नमस्ते", "राम राम", "प्रणाम", "जय हिंद", "हेलो", "हैलो"]
+GREETINGS["mr-IN"] += ["नमस्कार"]
+GREETINGS["ne-IN"] += ["नमस्ते"]
+GREETINGS["te-IN"] += ["నమస్కారం", "నమస్కారము"]
+GREETINGS["ta-IN"] += ["வணக்கம்"]
+GREETINGS["kn-IN"] += ["ನಮಸ್ಕಾರ"]
+GREETINGS["ml-IN"] += ["നമസ്കാരം"]
+GREETINGS["bn-IN"] += ["নমস্কার", "নমস্তে"]
+GREETINGS["gu-IN"] += ["નમસ્તે", "કેમ છો"]
+GREETINGS["pa-IN"] += ["ਸਤ ਸ੍ਰੀ ਅਕਾਲ"]
+GREETINGS["od-IN"] += ["ନମସ୍କାର"]
+GREETINGS["ur-IN"] += ["السلام علیکم"]
+WAKE_NAMES += ["टिलाया", "टिल्वी", "टिलवी", "तिलवी", "तिलाया", "टिल्डा", "तेलवी", "टिलाया टिल्वी",
+               "టిల్వి", "டில்வி", "ಟಿಲ್ವಿ", "ടിൽവി", "টিলভি"]
 
 
 def _build_index():

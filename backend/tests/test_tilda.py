@@ -177,3 +177,14 @@ def test_new_wake_names_and_hellos():
         cands, rest = detect_greeting(said)
         assert cands[0] == expect, said
         assert "tilvi" not in rest and "tilaya" not in rest and "telvi" not in rest, rest
+
+
+def test_native_script_greeting():
+    from tilda.greetings import detect_greeting
+    c, rest = detect_greeting("नमस्ते टिलाया टिलाया टिलाया नमस्ते टिलाया")
+    assert c and c[0] == "hi-IN"
+    assert rest.startswith("टिलाया")
+    c, _ = detect_greeting("నమస్కారం టిల్వి hello")
+    assert c and "te-IN" in c
+    c, _ = detect_greeting("Namaste, Tilvi!")
+    assert c and c[0] == "hi-IN"
