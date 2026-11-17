@@ -594,16 +594,25 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               const Divider(height: 8),
+              Row(children: [
+                const Text('Status'),
+                const Spacer(),
+                TextButton.icon(
+                  icon: const Icon(Icons.copy, size: 18),
+                  label: const Text('Copy all'),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: _statusText()));
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied. Paste it in the chat.')));
+                    }
+                  },
+                ),
+              ]),
               Expanded(
-                flex: 2,
-                child: SingleChildScrollView(
-                  reverse: false,
-                  child: Text(
-                    '$_info\n\nLearned: ${_style.count} fix(es) · words: ${_style.vocab.length} · '
-                    'voice data: ${(_style.trainedSeconds / 60).toStringAsFixed(1)}/60 min · '
-                    'offline model: ${_asr.ready ? 'ready' : 'not downloaded'}'
-                    '${_dl != null ? ' (${(_dl! * 100).round()}%)' : ''}',
-                    style: Theme.of(context).textTheme.bodySmall,
+                flex: 3,
+                child: Scrollbar(
+                  child: SingleChildScrollView(
+                    child: SelectableText(_statusText(), style: Theme.of(context).textTheme.bodySmall),
                   ),
                 ),
               ),
@@ -611,4 +620,9 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
       );
+
+  String _statusText() => '$_info\n\nLearned: ${_style.count} fix(es) · words: ${_style.vocab.length} · '
+      'voice data: ${(_style.trainedSeconds / 60).toStringAsFixed(1)}/60 min · '
+      'offline model: ${_asr.ready ? 'ready' : 'not downloaded'}'
+      '${_dl != null ? ' (${(_dl! * 100).round()}%)' : ''}';
 }
