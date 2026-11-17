@@ -48,7 +48,7 @@ class SarvamEngine(Engine):
             r = requests.post(
                 self.url,
                 headers={"api-subscription-key": self.api_key},
-                files={"file": f},
+                files={"file": ("audio.wav", f, "audio/wav")},
                 data={"model": self.model, "mode": self.mode, "language_code": lang},
                 timeout=30,
             )
