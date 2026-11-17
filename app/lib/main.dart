@@ -333,6 +333,7 @@ class _HomePageState extends State<HomePage> {
           try {
             final req = http.MultipartRequest('POST', Uri.parse('${_url.text.trim()}/transcribe'))
               ..fields['lang'] = _sessLang[sess] ?? 'auto'
+              ..fields['mine'] = _style.myLangs.join(',')
               ..fields.addAll(_style.hints().isEmpty ? {} : {'hints': _style.hints()})
               ..files.add(await http.MultipartFile.fromPath('audio', f.path));
             final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 70)));
@@ -345,7 +346,9 @@ class _HomePageState extends State<HomePage> {
             if (j['error'] != null) throw Exception('${j['error']} ${j['log'] ?? ''}');
             _lastErr = '';
             final lang = j['language'] as String?;
-            if (lang != null && lang != 'unknown' && !_sessLang.containsKey(sess)) _sessLang[sess] = lang;
+            if (lang != null && lang != 'unknown' && (_style.myLangs.contains(lang) || j['greeting_found'] == true) && !_sessLang.containsKey(sess)) {
+              _sessLang[sess] = lang;
+            }
             if (_style.keepAudio) {
               // held on the phone until you review the text and tap "Save my correction"
               final keep = File('${d.path}/../kept_$name');
@@ -428,6 +431,22 @@ class _HomePageState extends State<HomePage> {
           child: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               TextField(controller: _url, decoration: const InputDecoration(labelText: 'Server address')),
+              const Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('Languages I speak'))),
+              Wrap(spacing: 8, children: [
+                for (final e in const {
+                  'hi-IN': 'Hindi', 'od-IN': 'Odia', 'en-IN': 'English', 'bn-IN': 'Bengali', 'te-IN': 'Telugu',
+                  'ta-IN': 'Tamil', 'kn-IN': 'Kannada', 'ml-IN': 'Malayalam', 'mr-IN': 'Marathi',
+                  'gu-IN': 'Gujarati', 'pa-IN': 'Punjabi'
+                }.entries)
+                  FilterChip(
+                    label: Text(e.value),
+                    selected: _style.myLangs.contains(e.key),
+                    onSelected: (v) async {
+                      setSheet(() => v ? _style.myLangs.add(e.key) : _style.myLangs.remove(e.key));
+                      await _style.save();
+                    },
+                  ),
+              ]),
               if (!_asr.ready)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
