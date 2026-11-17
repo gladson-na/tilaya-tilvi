@@ -160,6 +160,11 @@ class _HomePageState extends State<HomePage> {
   bool _online = true;
   bool _bubbleSession = false; // this recording was started from the floating bubble
   bool _bubbleOn = false;
+  static const _native = MethodChannel('tilda/native');
+  bool _autoBubble = true; // bubble appears only while a text box is focused
+  bool _readBack = false; // speak the typed text back (eyes-free check)
+  bool _nativeOn = false;
+  Timer? _hideT;
   double? _dl; // model download progress
   String _text = '';
   int _shownSess = 0;
@@ -179,6 +184,11 @@ class _HomePageState extends State<HomePage> {
             _start();
           }
         }
+      });
+    }
+    if (Platform.isAndroid) {
+      _native.setMethodCallHandler((c) async {
+        if (c.method == 'focus') _onFocus(c.arguments == true);
       });
     }
     _style.load().then((_) => mounted ? setState(() {}) : null);
@@ -274,6 +284,33 @@ class _HomePageState extends State<HomePage> {
 
   void _tellBubble(String state) {
     if (_bubbleOn && Platform.isAndroid) FlutterOverlayWindow.shareData({'state': state});
+  }
+
+  Future<void> _onFocus(bool editable) async {
+    if (!_autoBubble) return;
+    _hideT?.cancel();
+    if (editable) {
+      if (!_bubbleOn && await FlutterOverlayWindow.isPermissionGranted()) await _toggleBubble();
+    } else if (_bubbleOn) {
+      _hideT = Timer(const Duration(seconds: 2), () {
+        if (_bubbleOn && !_recording && !_bubbleSession) _toggleBubble();
+      });
+    }
+  }
+
+  Future<bool> _typeInto(String t) async {
+    try {
+      return await _native.invokeMethod<bool>('insert', '$t ') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _sayBack(String t, String? lang) async {
+    try {
+      await _tts.setLanguage(lang ?? 'en-IN');
+      await _tts.speak(t);
+    } catch (_) {}
   }
 
   Future<void> _toggleBubble() async {
@@ -386,7 +423,12 @@ class _HomePageState extends State<HomePage> {
       if (_bubbleSession && !_recording && left == 0 && _text.isNotEmpty) {
         // started from the bubble: put the finished text on the clipboard, ready to paste
         _bubbleSession = false;
-        await Clipboard.setData(ClipboardData(text: _text));
+        final typed = await _typeInto(_text);
+        if (!typed) await Clipboard.setData(ClipboardData(text: _text));
+        if (mounted) {
+          setState(() => _info = typed ? 'Typed into the text box.' : 'Copied. Paste it (turn on typing in settings to skip this).');
+        }
+        if (_readBack) await _sayBack(_text, _sessLang[_shownSess]);
         _tellBubble('done');
         Future.delayed(const Duration(seconds: 3), () => _tellBubble('idle'));
       }
@@ -421,7 +463,13 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  void _openSettings() {
+  Future<void> _openSettings() async {
+    if (Platform.isAndroid) {
+      try {
+        _nativeOn = await _native.invokeMethod<bool>('enabled') ?? false;
+      } catch (_) {}
+    }
+    if (!mounted) return;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -431,6 +479,31 @@ class _HomePageState extends State<HomePage> {
           child: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               TextField(controller: _url, decoration: const InputDecoration(labelText: 'Server address')),
+              if (Platform.isAndroid) ...[
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(_nativeOn ? 'Typing into other apps: on' : 'Typing into other apps: off'),
+                  subtitle: const Text('Turn on "Tilda typing" in Accessibility. If it is greyed out: App info, three dots, Allow restricted settings.'),
+                  trailing: TextButton(
+                    onPressed: () => _native.invokeMethod('settings'),
+                    child: const Text('Open'),
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Bubble only on text boxes'),
+                  subtitle: const Text('Shows when you tap a text box in any app, hides after.'),
+                  value: _autoBubble,
+                  onChanged: (v) => setSheet(() => _autoBubble = v),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Read it back to me'),
+                  subtitle: const Text('Speaks the typed text aloud so you can check it by ear.'),
+                  value: _readBack,
+                  onChanged: (v) => setSheet(() => _readBack = v),
+                ),
+              ],
               const Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('Languages I speak'))),
               Wrap(spacing: 8, children: [
                 for (final e in const {

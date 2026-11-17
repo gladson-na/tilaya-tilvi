@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tilda_service_desc">Lets Tilda show its bubble when you tap a text box and type what you say into it. It does not read or store what is on your screen.</string>
+</resources>
