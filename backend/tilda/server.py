@@ -96,9 +96,15 @@ def do_transcribe():
                 said = first.text
                 greeting_langs, rest = detect_greeting(said)
                 if greeting_langs:
-                    greeting_langs = rank_by_followup(greeting_langs, rest)
-                    # the user's own languages first (stable sort keeps the greeting order inside each group)
-                    greeting_langs = sorted(greeting_langs, key=lambda l: l not in mine)
+                    # Standby set: greeting languages the user really speaks. If none match, keep all.
+                    own = [l for l in greeting_langs if l in mine]
+                    ranked = rank_by_followup(own or greeting_langs, rest)
+                    # the standby languages go first; Hindi and English stay only as last resorts
+                    greeting_langs = ranked
+                    # Still several? The engine's own guess on the words after the name breaks the tie.
+                    heard = getattr(first, "language", None)
+                    if heard in greeting_langs:
+                        greeting_langs = [heard] + [l for l in greeting_langs if l != heard]
             except AllEnginesFailed as e:
                 first_log = e.attempts
             log += [("first pass: " + a, b) for a, b in first_log]
