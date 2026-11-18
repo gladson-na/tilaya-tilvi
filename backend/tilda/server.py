@@ -15,6 +15,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from .engines import Engine, EngineError, Result, SarvamEngine, WhisperEngine, default_chain
 from .greetings import BETA, GREETINGS, detect_greeting, rank_by_followup
 from .router import AllEnginesFailed, transcribe
+from .talk import TalkError, reply as talk_reply, speak as talk_speak
 from .translate import TranslateError, translate
 
 app = Flask(__name__, static_folder="static")
@@ -86,6 +87,37 @@ def do_translate():
         return jsonify(text=translate(text, source, target), target=target)
     except TranslateError as e:
         return jsonify(error=str(e)), 502
+
+
+@app.post("/chat")
+def do_chat():
+    j = request.get_json(silent=True) or {}
+    msgs, lang = j.get("messages", []), j.get("lang", "en-IN")
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(reply="(demo reply) " + (msgs[-1]["content"] if msgs else ""))
+    try:
+        return jsonify(reply=talk_reply(msgs, lang))
+    except TalkError as e:
+        app.logger.error("chat failed: %s", e)
+        return jsonify(error=str(e)), 502
+    except Exception as e:  # network problems must not crash the worker
+        app.logger.error("chat crashed: %s", e)
+        return jsonify(error="chat unavailable"), 502
+
+
+@app.post("/speak")
+def do_speak():
+    j = request.get_json(silent=True) or {}
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(error="no voice in demo mode"), 503
+    try:
+        return jsonify(audio=talk_speak(j.get("text", ""), j.get("lang", "en-IN")))
+    except TalkError as e:
+        app.logger.error("speak failed: %s", e)
+        return jsonify(error=str(e)), 502
+    except Exception as e:
+        app.logger.error("speak crashed: %s", e)
+        return jsonify(error="voice unavailable"), 502
 
 
 @app.get("/languages")

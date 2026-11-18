@@ -209,3 +209,37 @@ def test_rate_limit(monkeypatch):
     c = server.app.test_client()
     codes = [c.post("/act", json={"text": "hi"}).status_code for _ in range(4)]
     assert codes[:2] == [200, 200] and codes[-1] == 429
+
+
+def test_talk_reply_and_speak(monkeypatch):
+    from tilda import talk
+
+    class R:
+        def __init__(self, code, data): self.status_code, self._d, self.text = code, data, str(data)
+        def json(self): return self._d
+
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append(url)
+        if "chat" in url:
+            return R(200, {"choices": [{"message": {"content": "<think>hm</think>**Namaste!** Kaise ho?"}}]})
+        return R(200, {"audios": ["QUJD", "REVG"]})
+
+    monkeypatch.setattr(talk.requests, "post", fake_post)
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    assert talk.reply([{"role": "user", "content": "hi"}], "hi-IN") == "Namaste! Kaise ho?"
+    assert talk.speak("hello", "od-IN") == "QUJDREVG"
+
+
+def test_talk_falls_back_to_second_model(monkeypatch):
+    from tilda import talk
+
+    class R:
+        def __init__(self, code, data=None): self.status_code, self._d, self.text = code, data or {}, "x"
+        def json(self): return self._d
+
+    seq = iter([R(404), R(200, {"choices": [{"message": {"content": "ok"}}]})])
+    monkeypatch.setattr(talk.requests, "post", lambda *a, **k: next(seq))
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    assert talk.reply([{"role": "user", "content": "hi"}], "en-IN") == "ok"
