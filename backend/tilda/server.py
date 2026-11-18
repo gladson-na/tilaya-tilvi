@@ -6,6 +6,8 @@ Flow: browser records -> POST /transcribe -> ffmpeg makes a 16 kHz WAV ->
 import os
 import subprocess
 import tempfile
+import time
+from collections import OrderedDict, defaultdict, deque
 
 from .agent import interpret
 from flask import Flask, jsonify, request, send_from_directory
@@ -16,6 +18,32 @@ from .router import AllEnginesFailed, transcribe
 from .translate import TranslateError, translate
 
 app = Flask(__name__, static_folder="static")
+
+# Protect the paid speech credits: a per-address rate limit, a daily cap, and a duplicate-upload cache.
+_HITS = defaultdict(deque)
+_DAY = {"day": "", "n": 0}
+_DONE = OrderedDict()  # piece id -> finished answer, so a retried upload is not billed twice
+
+
+@app.before_request
+def _guard():
+    if request.method != "POST":
+        return None
+    ip = (request.headers.get("X-Forwarded-For", request.remote_addr or "?")).split(",")[0].strip()
+    now = time.time()
+    q = _HITS[ip]
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= int(os.environ.get("TILDA_RATE_PER_MIN", "40")):
+        return jsonify(error="too many requests, slow down"), 429
+    q.append(now)
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    if _DAY["day"] != day:
+        _DAY.update(day=day, n=0)
+    _DAY["n"] += 1
+    if _DAY["n"] > int(os.environ.get("TILDA_DAILY_CAP", "3000")):
+        return jsonify(error="daily limit reached"), 429
+    return None
 
 
 class _Demo(Engine):
@@ -82,6 +110,9 @@ def to_wav(raw: bytes) -> str:
 
 @app.post("/transcribe")
 def do_transcribe():
+    piece = request.form.get("piece", "")
+    if piece and piece in _DONE:
+        return jsonify(_DONE[piece])
     raw = request.files["audio"].read()
     forced = request.form.get("lang", "auto")  # "auto" = greeting then auto-detect
     mine = [x for x in request.form.get("mine", "").split(",") if x][:12]  # the user's own languages
@@ -119,9 +150,14 @@ def do_transcribe():
                     lang = mine[0]
                     res, main_log = transcribe(wav, lang, main_chain, timeout=8, hints=hints)
                     log += main_log
-                return jsonify(text=res.text, engine=res.engine, language=lang,
-                               greeting_found=bool(greeting_langs), heard_first=said, log=log,
-                               action=interpret(res.text))
+                answer = dict(text=res.text, engine=res.engine, language=lang,
+                              greeting_found=bool(greeting_langs), heard_first=said, log=log,
+                              action=interpret(res.text))
+                if piece:
+                    _DONE[piece] = answer
+                    while len(_DONE) > 200:
+                        _DONE.popitem(last=False)
+                return jsonify(answer)
             except AllEnginesFailed as e:
                 log += e.attempts
                 err = e

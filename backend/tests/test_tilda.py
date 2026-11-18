@@ -188,3 +188,24 @@ def test_native_script_greeting():
     assert c and "te-IN" in c
     c, _ = detect_greeting("Namaste, Tilvi!")
     assert c and c[0] == "hi-IN"
+
+
+def test_duplicate_piece_not_reprocessed(monkeypatch):
+    from tilda import server
+    monkeypatch.setenv("TILDA_FAKE", "1")
+    c = server.app.test_client()
+    monkeypatch.setattr(server, "to_wav", lambda raw: __import__("tempfile").NamedTemporaryFile(delete=False).name)
+    import io
+    r1 = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p1", "lang": "hi-IN"}).get_json()
+    server._DONE["p1"]["text"] = "cached"
+    r2 = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p1", "lang": "hi-IN"}).get_json()
+    assert r1["engine"] and r2["text"] == "cached"
+
+
+def test_rate_limit(monkeypatch):
+    from tilda import server
+    monkeypatch.setenv("TILDA_RATE_PER_MIN", "2")
+    server._HITS.clear()
+    c = server.app.test_client()
+    codes = [c.post("/act", json={"text": "hi"}).status_code for _ in range(4)]
+    assert codes[:2] == [200, 200] and codes[-1] == 429

@@ -371,6 +371,7 @@ class _HomePageState extends State<HomePage> {
             final req = http.MultipartRequest('POST', Uri.parse('${_url.text.trim()}/transcribe'))
               ..fields['lang'] = _sessLang[sess] ?? 'auto'
               ..fields['mine'] = _style.myLangs.join(',')
+              ..fields['piece'] = name
               ..fields.addAll(_style.hints().isEmpty ? {} : {'hints': _style.hints()})
               ..files.add(await http.MultipartFile.fromPath('audio', f.path));
             final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 70)));
@@ -395,6 +396,10 @@ class _HomePageState extends State<HomePage> {
             await f.delete();
             _rough.remove(name);
             _pieceText[name] = (j['text'] ?? '') as String;
+            if (!_style.firstDone && _pieceText[name]!.trim().isNotEmpty) {
+              _style.firstDone = true;
+              await _style.save();
+            }
             _online = true;
             if (mounted) {
               setState(() {
@@ -625,6 +630,12 @@ class _HomePageState extends State<HomePage> {
                       border: OutlineInputBorder()),
                 ),
               ),
+              if (!_style.firstDone)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('First time:\n1. Tap the gear and tick the languages you speak.\n2. Tap the green button and say "namaste tilda", then one sentence.\n3. Your words appear in the box.\nThe other buttons show up after your first success.'),
+                ),
+              if (_style.firstDone) ...[
               const SizedBox(height: 8),
               Row(children: [
                 Expanded(
@@ -685,6 +696,7 @@ class _HomePageState extends State<HomePage> {
                       style: Theme.of(context).textTheme.titleMedium),
                 ),
               ),
+              ],
               const Divider(height: 8),
               Row(children: [
                 const Text('Status'),
