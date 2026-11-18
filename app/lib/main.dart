@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
@@ -164,6 +165,14 @@ class _HomePageState extends State<HomePage> {
   bool _autoBubble = true; // bubble appears only while a text box is focused
   bool _readBack = false; // speak the typed text back (eyes-free check)
   bool _nativeOn = false;
+  // talking agent
+  final _player = AudioPlayer();
+  bool _talk = false; // conversation mode is on
+  bool _awaitingReply = false; // recording finished, waiting for its text
+  final _history = <Map<String, String>>[];
+  StreamSubscription<Amplitude>? _ampSub;
+  int _quietMs = 0;
+  bool _heardVoice = false;
   Timer? _hideT;
   double? _dl; // model download progress
   String _text = '';
@@ -191,6 +200,7 @@ class _HomePageState extends State<HomePage> {
         if (c.method == 'focus') _onFocus(c.arguments == true);
       });
     }
+    _tts.awaitSpeakCompletion(true);
     _style.load().then((_) => mounted ? setState(() {}) : null);
     _asr.check().then((_) => mounted ? setState(() {}) : null);
     _flush();
@@ -231,6 +241,7 @@ class _HomePageState extends State<HomePage> {
       if (_buf.length >= _pieceSeconds * _bytesPerSecond) _savePiece();
     });
     _tellBubble('recording');
+    if (_talk) _watchSilence();
     setState(() {
       _recording = true;
       _text = '';
@@ -240,6 +251,9 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _stop() async {
     if (!_recording) return;
+    await _ampSub?.cancel();
+    _ampSub = null;
+    if (_talk) _awaitingReply = true;
     await _recorder.stop();
     await _sub?.cancel();
     await _savePiece();
@@ -284,6 +298,101 @@ class _HomePageState extends State<HomePage> {
 
   void _tellBubble(String state) {
     if (_bubbleOn && Platform.isAndroid) FlutterOverlayWindow.shareData({'state': state});
+  }
+
+  /// Conversation mode: stops recording by itself when you finish a sentence.
+  void _watchSilence() {
+    _quietMs = 0;
+    _heardVoice = false;
+    _ampSub?.cancel();
+    _ampSub = _recorder.onAmplitudeChanged(const Duration(milliseconds: 150)).listen((a) {
+      if (a.current > -32) {
+        _heardVoice = true;
+        _quietMs = 0;
+      } else {
+        _quietMs += 150;
+      }
+      if (_heardVoice && _quietMs >= 1300) {
+        _stop();
+      } else if (!_heardVoice && _quietMs >= 10000) {
+        _endTalk('Nobody spoke, so I stopped listening.');
+      }
+    });
+  }
+
+  Future<void> _toggleTalk() async {
+    if (_talk) {
+      await _endTalk('Stopped talking.');
+      return;
+    }
+    _history.clear();
+    setState(() {
+      _talk = true;
+      _translation = '';
+    });
+    await _start();
+  }
+
+  Future<void> _endTalk(String why) async {
+    _talk = false;
+    await _ampSub?.cancel();
+    _ampSub = null;
+    try {
+      await _player.stop();
+      await _tts.stop();
+    } catch (_) {}
+    if (_recording) await _stop();
+    _awaitingReply = false;
+    if (mounted) setState(() => _info = why);
+  }
+
+  String _convo() => _history.map((m) => '${m['role'] == 'user' ? 'You' : 'Tilda'}: ${m['content']}').join('\n\n');
+
+  Future<void> _agentTurn() async {
+    final said = _text.trim();
+    final lang = _sessLang[_shownSess] ?? (_style.myLangs.isNotEmpty ? _style.myLangs.first : 'en-IN');
+    _history.add({'role': 'user', 'content': said});
+    if (mounted) setState(() { _info = 'Tilda is thinking...'; _translation = _convo(); });
+    var answer = '';
+    try {
+      final recent = _history.length > 12 ? _history.sublist(_history.length - 12) : _history;
+      final res = await http
+          .post(Uri.parse('${_url.text.trim()}/chat'),
+              headers: {'Content-Type': 'application/json'}, body: jsonEncode({'messages': recent, 'lang': lang}))
+          .timeout(const Duration(seconds: 60));
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      answer = (j['reply'] ?? '') as String;
+      if (j['error'] != null) _lastErr = '${j['error']}';
+    } catch (e) {
+      _lastErr = '$e';
+    }
+    if (answer.isEmpty) answer = 'Sorry, I could not answer that. Please try again.';
+    _history.add({'role': 'assistant', 'content': answer});
+    if (!mounted || !_talk) return;
+    setState(() { _info = 'Tilda is speaking...'; _translation = _convo(); });
+    await _say(answer, lang);
+    if (_talk && !_recording) await _start();
+  }
+
+  /// Speaks with Sarvam's voice; falls back to the phone's own voice if the server cannot.
+  Future<void> _say(String text, String lang) async {
+    try {
+      final res = await http
+          .post(Uri.parse('${_url.text.trim()}/speak'),
+              headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang}))
+          .timeout(const Duration(seconds: 40));
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['audio'] == null) throw Exception(j['error'] ?? 'no audio');
+      final done = _player.onPlayerComplete.first;
+      await _player.play(BytesSource(base64Decode(j['audio'] as String)));
+      await done.timeout(const Duration(seconds: 90));
+    } catch (e) {
+      _lastErr = 'voice: $e';
+      try {
+        await _tts.setLanguage(lang);
+        await _tts.speak(text);
+      } catch (_) {}
+    }
   }
 
   Future<void> _onFocus(bool editable) async {
@@ -436,6 +545,14 @@ class _HomePageState extends State<HomePage> {
         if (_readBack) await _sayBack(_text, _sessLang[_shownSess]);
         _tellBubble('done');
         Future.delayed(const Duration(seconds: 3), () => _tellBubble('idle'));
+      }
+      if (_talk && _awaitingReply && !_recording && left == 0) {
+        _awaitingReply = false;
+        if (_text.trim().isEmpty) {
+          await _start();
+        } else {
+          unawaited(_agentTurn());
+        }
       }
       if (left > 0 && mounted) {
         setState(() => _info =
@@ -628,6 +745,14 @@ class _HomePageState extends State<HomePage> {
                   decoration: const InputDecoration(
                       hintText: 'Your words appear here. Fix anything wrong, then tap "Save my correction".',
                       border: OutlineInputBorder()),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: FilledButton.icon(
+                  onPressed: _toggleTalk,
+                  icon: Icon(_talk ? Icons.stop : Icons.record_voice_over),
+                  label: Text(_talk ? 'Stop talking' : 'Talk to Tilda'),
                 ),
               ),
               if (!_style.firstDone)
