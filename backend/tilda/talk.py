@@ -29,7 +29,7 @@ def system_prompt(lang: str) -> str:
     name = LANG_NAMES.get(lang, "the user's language")
     return (f"You are Tilda, a friendly voice assistant talking with someone out loud. Reply in {name}, "
             "in the same script the person uses. Keep answers to one to three short sentences, plain speech, "
-            "no lists, no markdown, no emojis. If you are not sure, say so briefly. Ask at most one question back.")
+            "You are a woman, so use feminine forms of speech where the language has them. no lists, no markdown, no emojis. If you are not sure, say so briefly. Ask at most one question back.")
 
 
 def clean(text: str) -> str:
@@ -50,7 +50,7 @@ def reply(messages, lang: str, api_key=None) -> str:
             CHAT_URL,
             headers={"api-subscription-key": key, "Content-Type": "application/json"},
             json={"model": model, "messages": [{"role": "system", "content": system_prompt(lang)}] + turns,
-                  "temperature": 0.4, "max_tokens": 500},
+                  "temperature": 0.4, "max_tokens": 300, "reasoning_effort": None},
             timeout=40,
         )
         if r.status_code == 200:
@@ -67,12 +67,13 @@ def reply(messages, lang: str, api_key=None) -> str:
     raise TalkError(last or "no answer")
 
 
-def speak(text: str, lang: str, speaker: str = "shubh", api_key=None) -> str:
+def speak(text: str, lang: str, speaker: str = None, api_key=None) -> str:
     """Returns base64 WAV audio."""
     key = _key(api_key)
     text = (text or "").strip()[:1500]
     if not text:
         raise TalkError("nothing to say")
+    speaker = speaker or os.environ.get("TILDA_VOICE", "priya")
     code = lang if lang in SPEECH_LANGS else "en-IN"
     r = requests.post(
         TTS_URL,
