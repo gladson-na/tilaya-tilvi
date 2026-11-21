@@ -243,3 +243,25 @@ def test_talk_falls_back_to_second_model(monkeypatch):
     monkeypatch.setattr(talk.requests, "post", lambda *a, **k: next(seq))
     monkeypatch.setenv("SARVAM_API_KEY", "k")
     assert talk.reply([{"role": "user", "content": "hi"}], "en-IN") == "ok"
+
+
+def test_talk_turns_reasoning_off_and_uses_female_voice(monkeypatch):
+    from tilda import talk
+    seen = []
+
+    class R:
+        status_code = 200
+        text = "x"
+        def __init__(self, d): self._d = d
+        def json(self): return self._d
+
+    def fake_post(url, **kw):
+        seen.append(kw["json"])
+        return R({"choices": [{"message": {"content": "ok"}}]} if "chat" in url else {"audios": ["QQ=="]})
+
+    monkeypatch.setattr(talk.requests, "post", fake_post)
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    talk.reply([{"role": "user", "content": "hi"}], "hi-IN")
+    talk.speak("hi", "hi-IN")
+    assert seen[0]["reasoning_effort"] is None
+    assert seen[1]["speaker"] == "priya"

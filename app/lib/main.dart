@@ -174,6 +174,7 @@ class _HomePageState extends State<HomePage> {
   int _quietMs = 0;
   bool _heardVoice = false;
   Timer? _hideT;
+  Timer? _svcT;
   double? _dl; // model download progress
   String _text = '';
   int _shownSess = 0;
@@ -201,6 +202,14 @@ class _HomePageState extends State<HomePage> {
       });
     }
     _tts.awaitSpeakCompletion(true);
+    if (Platform.isAndroid) {
+      _svcT = Timer.periodic(const Duration(seconds: 3), (_) async {
+        try {
+          final v = await _native.invokeMethod<bool>('enabled') ?? false;
+          if (v != _nativeOn && mounted) setState(() => _nativeOn = v);
+        } catch (_) {}
+      });
+    }
     _style.load().then((_) => mounted ? setState(() {}) : null);
     _asr.check().then((_) => mounted ? setState(() {}) : null);
     _flush();
@@ -582,6 +591,7 @@ class _HomePageState extends State<HomePage> {
     _textCtl.dispose();
     _textFocus.dispose();
     _url.dispose();
+    _svcT?.cancel();
     super.dispose();
   }
 
@@ -850,7 +860,7 @@ class _HomePageState extends State<HomePage> {
         ),
       );
 
-  String _statusText() => '$_info\n\nLearned: ${_style.count} fix(es) · words: ${_style.vocab.length} · '
+  String _statusText() => '$_info\n\nTyping into other apps: ${_nativeOn ? 'ON' : 'OFF (settings > Accessibility > Tilda typing)'}\n\nLearned: ${_style.count} fix(es) · words: ${_style.vocab.length} · '
       'voice data: ${(_style.trainedSeconds / 60).toStringAsFixed(1)}/60 min · '
       'offline model: ${_asr.ready ? 'ready' : 'not downloaded'}'
       '${_dl != null ? ' (${(_dl! * 100).round()}%)' : ''}';
