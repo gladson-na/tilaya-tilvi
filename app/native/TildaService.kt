@@ -31,6 +31,16 @@ class TildaService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var bubble: TextView? = null
     private var st = "idle"
+    private var savedX = -1
+    private var savedY = -1
+    private val watchR = object : Runnable {
+        override fun run() {
+            if (bubble != null) {
+                if (st != "recording" && !keyboardUp()) { hideBubble(); return }
+                handler.postDelayed(this, 700)
+            }
+        }
+    }
     private var onField = false
     private val hideR = Runnable { hideBubble() }
 
@@ -56,20 +66,43 @@ class TildaService : AccessibilityService() {
             v.textSize = 24f
             v.setTextColor(Color.WHITE)
             v.gravity = Gravity.CENTER
-            v.setOnClickListener { onTap?.invoke() }
             val size = (60 * d).toInt()
             val lp = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT)
-            lp.gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            lp.x = (12 * d).toInt()
+            lp.gravity = Gravity.TOP or Gravity.START
+            val dm = resources.displayMetrics
+            lp.x = if (savedX >= 0) savedX else dm.widthPixels - size - (12 * d).toInt()
+            lp.y = if (savedY >= 0) savedY else dm.heightPixels / 2 - size
+            var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
+            v.setOnTouchListener { _, ev ->
+                val wm2 = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                when (ev.action) {
+                    android.view.MotionEvent.ACTION_DOWN -> { downX = ev.rawX; downY = ev.rawY; startX = lp.x; startY = lp.y; moved = false }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val dx = ev.rawX - downX; val dy = ev.rawY - downY
+                        if (moved || Math.abs(dx) > 12 * d || Math.abs(dy) > 12 * d) {
+                            moved = true
+                            lp.x = (startX + dx).toInt(); lp.y = (startY + dy).toInt()
+                            savedX = lp.x; savedY = lp.y
+                            try { wm2.updateViewLayout(v, lp) } catch (_: Exception) {}
+                        }
+                    }
+                    android.view.MotionEvent.ACTION_UP -> if (!moved) onTap?.invoke()
+                }
+                true
+            }
             paint(v)
             (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(v, lp)
             bubble = v
+            handler.removeCallbacks(watchR)
+            handler.postDelayed(watchR, 1500)
         } catch (_: Exception) {}
     }
 
     private fun hideBubble() {
+        handler.removeCallbacks(hideR)
+        handler.removeCallbacks(watchR)
         bubble?.let { try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } catch (_: Exception) {} }
         bubble = null
     }
@@ -87,7 +120,7 @@ class TildaService : AccessibilityService() {
         onField = editable
         if (!auto) { hideBubble(); return }
         if (editable && keyboardUp()) showBubble()
-        else if (st == "idle") { handler.removeCallbacks(hideR); handler.postDelayed(hideR, 2500) }
+        else if (st != "recording") { handler.removeCallbacks(hideR); handler.postDelayed(hideR, 1200) }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
