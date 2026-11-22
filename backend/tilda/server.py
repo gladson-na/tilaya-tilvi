@@ -3,6 +3,7 @@
 Flow: browser records -> POST /transcribe -> ffmpeg makes a 16 kHz WAV ->
 1) quick first pass in Roman letters to catch a greeting -> 2) real pass in the greeted language.
 """
+import json
 import os
 import subprocess
 import tempfile
@@ -10,12 +11,12 @@ import time
 from collections import OrderedDict, defaultdict, deque
 
 from .agent import interpret
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 from .engines import Engine, EngineError, Result, SarvamEngine, WhisperEngine, default_chain
 from .greetings import BETA, GREETINGS, detect_greeting, rank_by_followup
 from .router import AllEnginesFailed, transcribe
-from .talk import TalkError, reply as talk_reply, speak as talk_speak
+from .talk import TalkError, reply as talk_reply, speak as talk_speak, stream_turn as talk_stream
 from .translate import TranslateError, translate
 
 app = Flask(__name__, static_folder="static")
@@ -103,6 +104,25 @@ def do_chat():
     except Exception as e:  # network problems must not crash the worker
         app.logger.error("chat crashed: %s", e)
         return jsonify(error="chat unavailable"), 502
+
+
+@app.post("/talk")
+def talk_route():
+    """Streams the answer sentence by sentence, each with its voice, as one JSON object per line."""
+    j = request.get_json(silent=True) or {}
+    msgs, lang = j.get("messages", []), j.get("lang", "en-IN")
+
+    def gen():
+        try:
+            if os.environ.get("TILDA_FAKE"):
+                yield json.dumps({"text": talk_reply(msgs, lang)}) + "\n"
+                return
+            for item in talk_stream(msgs, lang):
+                yield json.dumps(item) + "\n"
+        except TalkError as e:
+            yield json.dumps({"error": str(e)}) + "\n"
+
+    return Response(gen(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
 @app.post("/speak")
