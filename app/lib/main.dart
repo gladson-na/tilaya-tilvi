@@ -159,6 +159,8 @@ class _HomePageState extends State<HomePage> {
   final _rough = <String>{}; // pieces whose text is still the rough offline guess
   final _sessLang = <int, String>{};
   bool _online = true;
+  final _typedNames = <String>{}; // pieces already typed live into the other app
+  bool _flushAgain = false;
   bool _bubbleSession = false; // this recording was started from the floating bubble
   bool _bubbleOn = false;
   static const _native = MethodChannel('tilda/native');
@@ -246,6 +248,7 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     _sess = DateTime.now().millisecondsSinceEpoch;
+    _typedNames.clear();
     _seq = 0;
     _shownSess = _sess;
     _buf.clear();
@@ -253,7 +256,7 @@ class _HomePageState extends State<HomePage> {
         const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1));
     _sub = stream.listen((chunk) {
       _buf.add(chunk);
-      if (_buf.length >= _pieceSeconds * _bytesPerSecond) _savePiece();
+      if (_buf.length >= (_bubbleSession ? 4 : _pieceSeconds) * _bytesPerSecond) _savePiece();
     });
     _tellBubble('recording');
     if (_talk) _watchSilence();
@@ -497,7 +500,10 @@ class _HomePageState extends State<HomePage> {
   /// Send saved pieces in order. A piece is deleted only after the server answers.
   /// While the network is down, pieces get a rough on-device transcript instead.
   Future<void> _flush() async {
-    if (_flushing) return;
+    if (_flushing) {
+      _flushAgain = true;
+      return;
+    }
     _flushing = true;
     try {
       final d = await _dir();
@@ -542,6 +548,10 @@ class _HomePageState extends State<HomePage> {
               await _style.save();
             }
             _online = true;
+            if (_bubbleSession && !_talk && sess == _sess && _pieceText[name]!.trim().isNotEmpty) {
+              // live: put each piece into the other app as soon as it is understood
+              if (await _typeInto(_style.apply(_pieceText[name]!))) _typedNames.add(name);
+            }
             if (mounted) {
               setState(() {
                 _refreshText();
@@ -567,9 +577,15 @@ class _HomePageState extends State<HomePage> {
       }
       final left = d.listSync().where((f) => f.path.endsWith('.wav')).length;
       if (_bubbleSession && !_recording && left == 0 && _text.isNotEmpty) {
-        // started from the bubble: put the finished text on the clipboard, ready to paste
+        // started from the bubble: type whatever was not typed live, else leave it on the clipboard
         _bubbleSession = false;
-        final typed = await _typeInto(_text);
+        final rest = _pieceText.keys
+            .where((n) => n.startsWith(_sess.toString().padLeft(14, '0')) && !_typedNames.contains(n))
+            .toList()
+          ..sort();
+        final restText = _style.apply(rest.map((n) => _pieceText[n]!).where((t) => t.trim().isNotEmpty).join(' '));
+        var typed = true;
+        if (restText.isNotEmpty) typed = await _typeInto(restText);
         if (!typed) await Clipboard.setData(ClipboardData(text: _text));
         if (mounted) {
           setState(() => _info = typed ? 'Typed into the text box.' : 'Copied. Paste it (turn on typing in settings to skip this).');
@@ -592,6 +608,10 @@ class _HomePageState extends State<HomePage> {
       }
     } finally {
       _flushing = false;
+      if (_flushAgain) {
+        _flushAgain = false;
+        unawaited(_flush());
+      }
     }
   }
 
