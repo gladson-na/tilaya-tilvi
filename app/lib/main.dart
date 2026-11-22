@@ -370,23 +370,47 @@ class _HomePageState extends State<HomePage> {
     _history.add({'role': 'user', 'content': said});
     if (mounted) setState(() { _info = 'Tilda is thinking...'; _translation = _convo(); });
     var answer = '';
+    var spoke = false;
+    final t0 = DateTime.now();
+    var chain = Future<void>.value();
     try {
       final recent = _history.length > 12 ? _history.sublist(_history.length - 12) : _history;
-      final res = await http
-          .post(Uri.parse('${_url.text.trim()}/chat'),
-              headers: {'Content-Type': 'application/json'}, body: jsonEncode({'messages': recent, 'lang': lang}))
-          .timeout(const Duration(seconds: 60));
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      answer = (j['reply'] ?? '') as String;
-      if (j['error'] != null) _lastErr = '${j['error']}';
+      final req = http.Request('POST', Uri.parse('${_url.text.trim()}/talk'))
+        ..headers['Content-Type'] = 'application/json'
+        ..body = jsonEncode({'messages': recent, 'lang': lang});
+      final resp = await http.Client().send(req).timeout(const Duration(seconds: 60));
+      await for (final line in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+        if (line.trim().isEmpty) continue;
+        final j = jsonDecode(line) as Map<String, dynamic>;
+        if (j['error'] != null) _lastErr = '${j['error']}';
+        final t = (j['text'] ?? '') as String;
+        if (t.isNotEmpty) answer = answer.isEmpty ? t : '$answer $t';
+        final a64 = j['audio'] as String?;
+        if (a64 != null && _talk) {
+          if (!spoke && mounted) {
+            setState(() => _info = 'Tilda is speaking... (first words after ${DateTime.now().difference(t0).inMilliseconds} ms)');
+          }
+          spoke = true;
+          chain = chain.then((_) async {
+            final done = _player.onPlayerComplete.first;
+            await _player.play(BytesSource(base64Decode(a64)));
+            await done.timeout(const Duration(seconds: 90));
+          }).catchError((_) {});
+        }
+      }
     } catch (e) {
       _lastErr = '$e';
     }
+    await chain;
     if (answer.isEmpty) answer = 'Sorry, I could not answer that. Please try again.';
     _history.add({'role': 'assistant', 'content': answer});
     if (!mounted || !_talk) return;
-    setState(() { _info = 'Tilda is speaking...'; _translation = _convo(); });
-    await _say(answer, lang);
+    if (!spoke) {
+      setState(() { _info = 'Tilda is speaking...'; _translation = _convo(); });
+      await _say(answer, lang);
+    } else {
+      setState(() => _translation = _convo());
+    }
     if (_talk && !_recording) await _start();
   }
 

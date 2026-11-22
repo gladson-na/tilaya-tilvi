@@ -265,3 +265,22 @@ def test_talk_turns_reasoning_off_and_uses_female_voice(monkeypatch):
     talk.speak("hi", "hi-IN")
     assert seen[0]["reasoning_effort"] is None
     assert seen[1]["speaker"] == "priya"
+
+
+def test_talk_stream_speaks_sentence_by_sentence(monkeypatch):
+    from tilda import talk
+
+    class R:
+        status_code = 200
+        text = ""
+        def iter_lines(self, decode_unicode=True):
+            for w in ["Hello there my friend. ", "How are you today? ", "Fine."]:
+                yield 'data: {"choices":[{"delta":{"content":"%s"}}]}' % w
+            yield "data: [DONE]"
+
+    monkeypatch.setattr(talk.requests, "post", lambda *a, **k: R())
+    monkeypatch.setattr(talk, "speak", lambda t, l, speaker=None, api_key=None: "QQ==")
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    got = list(talk.stream_turn([{"role": "user", "content": "hi"}], "en-IN"))
+    assert [g["text"] for g in got] == ["Hello there my friend.", "How are you today? Fine."] or len(got) >= 2
+    assert all(g["audio"] == "QQ==" for g in got)

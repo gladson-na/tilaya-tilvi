@@ -1,4 +1,5 @@
 """The talking agent: Sarvam chat model for the answer, Sarvam Bulbul for the voice."""
+import json
 import os
 import re
 
@@ -87,3 +88,58 @@ def speak(text: str, lang: str, speaker: str = None, api_key=None) -> str:
     if not audios:
         raise TalkError("no audio returned")
     return "".join(audios)
+
+
+_END = re.compile(r"(?<=[.!?\u0964\u0965])\s+")
+
+
+def stream_turn(messages, lang: str, api_key=None):
+    """Yields {"text", "audio"} one sentence at a time, so Tilda starts talking after the first sentence."""
+    key = _key(api_key)
+    turns = [{"role": m["role"], "content": str(m["content"])[:1500]}
+             for m in (messages or []) if m.get("role") in ("user", "assistant")][-12:]
+    if not turns:
+        raise TalkError("nothing to answer")
+    r = requests.post(
+        CHAT_URL,
+        headers={"api-subscription-key": key, "Content-Type": "application/json"},
+        json={"model": CHAT_MODELS[0], "messages": [{"role": "system", "content": system_prompt(lang)}] + turns,
+              "temperature": 0.4, "max_tokens": 300, "reasoning_effort": None, "stream": True},
+        timeout=40, stream=True,
+    )
+    if r.status_code != 200:
+        raise TalkError(f"sarvam chat http {r.status_code}: {r.text[:200]}")
+    buf, sent = "", 0
+
+    def out(text):
+        text = clean(text)
+        if not text:
+            return None
+        try:
+            return {"text": text, "audio": speak(text, lang, api_key=key)}
+        except TalkError as e:
+            return {"text": text, "error": str(e)}
+
+    for raw in r.iter_lines(decode_unicode=True):
+        if not raw or not raw.startswith("data:"):
+            continue
+        data = raw[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            buf += json.loads(data)["choices"][0]["delta"].get("content") or ""
+        except (KeyError, IndexError, ValueError):
+            continue
+        parts = _END.split(buf)
+        for sent_text in parts[:-1]:
+            if len(sent_text) >= 12 or sent:
+                item = out(sent_text)
+                if item:
+                    sent += 1
+                    yield item
+            else:
+                parts[-1] = sent_text + " " + parts[-1]
+        buf = parts[-1]
+    item = out(buf)
+    if item:
+        yield item
