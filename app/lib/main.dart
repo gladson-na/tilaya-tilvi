@@ -173,7 +173,6 @@ class _HomePageState extends State<HomePage> {
   StreamSubscription<Amplitude>? _ampSub;
   int _quietMs = 0;
   bool _heardVoice = false;
-  Timer? _hideT;
   Timer? _svcT;
   double? _dl; // model download progress
   String _text = '';
@@ -198,7 +197,14 @@ class _HomePageState extends State<HomePage> {
     }
     if (Platform.isAndroid) {
       _native.setMethodCallHandler((c) async {
-        if (c.method == 'focus') _onFocus(c.arguments == true);
+        if (c.method == 'toggle') {
+          if (_recording) {
+            _stop();
+          } else {
+            _bubbleSession = true;
+            _start();
+          }
+        }
       });
     }
     _tts.awaitSpeakCompletion(true);
@@ -307,6 +313,7 @@ class _HomePageState extends State<HomePage> {
 
   void _tellBubble(String state) {
     if (_bubbleOn && Platform.isAndroid) FlutterOverlayWindow.shareData({'state': state});
+    if (Platform.isAndroid) _native.invokeMethod('state', state).catchError((_) {});
   }
 
   /// Conversation mode: stops recording by itself when you finish a sentence.
@@ -401,18 +408,6 @@ class _HomePageState extends State<HomePage> {
         await _tts.setLanguage(lang);
         await _tts.speak(text);
       } catch (_) {}
-    }
-  }
-
-  Future<void> _onFocus(bool editable) async {
-    if (!_autoBubble) return;
-    _hideT?.cancel();
-    if (editable) {
-      if (!_bubbleOn && await FlutterOverlayWindow.isPermissionGranted()) await _toggleBubble();
-    } else if (_bubbleOn) {
-      _hideT = Timer(const Duration(seconds: 2), () {
-        if (_bubbleOn && !_recording && !_bubbleSession) _toggleBubble();
-      });
     }
   }
 
@@ -626,7 +621,10 @@ class _HomePageState extends State<HomePage> {
                   title: const Text('Bubble only on text boxes'),
                   subtitle: const Text('Shows when you tap a text box in any app, hides after.'),
                   value: _autoBubble,
-                  onChanged: (v) => setSheet(() => _autoBubble = v),
+                  onChanged: (v) {
+                    setSheet(() => _autoBubble = v);
+                    _native.invokeMethod('auto', v).catchError((_) {});
+                  },
                 ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,

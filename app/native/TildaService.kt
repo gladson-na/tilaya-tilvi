@@ -6,7 +6,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.TextView
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -15,15 +23,73 @@ class TildaService : AccessibilityService() {
     companion object {
         var instance: TildaService? = null
         var onFocus: ((Boolean) -> Unit)? = null
+        var onTap: (() -> Unit)? = null
+        var auto = true
         fun insert(text: String): Boolean = instance?.doInsert(text) ?: false
     }
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var bubble: TextView? = null
+    private var st = "idle"
+    private var onField = false
+    private val hideR = Runnable { hideBubble() }
 
     override fun onServiceConnected() {
         instance = this
     }
 
+    private fun paint(v: TextView) {
+        val c = when (st) { "recording" -> Color.RED; "working" -> Color.rgb(255, 160, 0); "done" -> Color.rgb(40, 160, 70); else -> Color.rgb(0, 150, 136) }
+        val g = GradientDrawable()
+        g.shape = GradientDrawable.OVAL
+        g.setColor(c)
+        v.background = g
+        v.text = when (st) { "recording" -> "■"; "working" -> "…"; "done" -> "✓"; else -> "🎙" }
+    }
+
+    private fun showBubble() {
+        handler.removeCallbacks(hideR)
+        bubble?.let { paint(it); return }
+        try {
+            val d = resources.displayMetrics.density
+            val v = TextView(this)
+            v.textSize = 24f
+            v.setTextColor(Color.WHITE)
+            v.gravity = Gravity.CENTER
+            v.setOnClickListener { onTap?.invoke() }
+            val size = (60 * d).toInt()
+            val lp = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT)
+            lp.gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            lp.x = (12 * d).toInt()
+            paint(v)
+            (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(v, lp)
+            bubble = v
+        } catch (_: Exception) {}
+    }
+
+    private fun hideBubble() {
+        bubble?.let { try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } catch (_: Exception) {} }
+        bubble = null
+    }
+
+    fun setState(s: String) {
+        st = s
+        bubble?.let { paint(it) }
+        if (s == "idle" && !onField) handler.postDelayed(hideR, 2500)
+    }
+
+    private fun focusChanged(editable: Boolean) {
+        onField = editable
+        if (!auto) { hideBubble(); return }
+        if (editable) showBubble()
+        else if (st == "idle") { handler.removeCallbacks(hideR); handler.postDelayed(hideR, 2500) }
+    }
+
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
+        hideBubble()
         return super.onUnbind(intent)
     }
 
@@ -38,6 +104,7 @@ class TildaService : AccessibilityService() {
                 rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.isEditable == true
             else -> return
         }
+        focusChanged(editable)
         onFocus?.invoke(editable)
     }
 

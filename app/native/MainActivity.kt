@@ -11,9 +11,12 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tilda/native")
         TildaService.onFocus = { f -> ch.invokeMethod("focus", f) }
+        TildaService.onTap = { ch.invokeMethod("toggle", null) }
         ch.setMethodCallHandler { call, res ->
             when (call.method) {
                 "insert" -> res.success(TildaService.insert(call.arguments as String))
+                "state" -> { TildaService.instance?.setState(call.arguments as String); res.success(true) }
+                "auto" -> { TildaService.auto = call.arguments as Boolean; res.success(true) }
                 "enabled" -> res.success(TildaService.instance != null)
                 "settings" -> {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -26,6 +29,7 @@ class MainActivity : FlutterActivity() {
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         TildaService.onFocus = null
+        TildaService.onTap = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }
