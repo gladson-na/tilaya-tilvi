@@ -80,10 +80,13 @@ class TildaService : AccessibilityService() {
         if (s == "idle" && !onField) handler.postDelayed(hideR, 2500)
     }
 
+    private fun keyboardUp(): Boolean =
+        try { windows.any { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD } } catch (_: Exception) { true }
+
     private fun focusChanged(editable: Boolean) {
         onField = editable
         if (!auto) { hideBubble(); return }
-        if (editable) showBubble()
+        if (editable && keyboardUp()) showBubble()
         else if (st == "idle") { handler.removeCallbacks(hideR); handler.postDelayed(hideR, 2500) }
     }
 
@@ -97,6 +100,11 @@ class TildaService : AccessibilityService() {
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         if (e == null || e.packageName == packageName) return
+        if (e.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            if (onField && !keyboardUp()) focusChanged(false)
+            else if (onField) focusChanged(true)
+            return
+        }
         val editable = when (e.eventType) {
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> e.source?.isEditable == true
             AccessibilityEvent.TYPE_VIEW_CLICKED,

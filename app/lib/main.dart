@@ -264,7 +264,10 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  DateTime? _stopT;
+
   Future<void> _stop() async {
+    _stopT = DateTime.now();
     if (!_recording) return;
     await _ampSub?.cancel();
     _ampSub = null;
@@ -372,6 +375,7 @@ class _HomePageState extends State<HomePage> {
     var answer = '';
     var spoke = false;
     final t0 = DateTime.now();
+    final heardMs = _stopT == null ? 0 : t0.difference(_stopT!).inMilliseconds;
     var chain = Future<void>.value();
     try {
       final recent = _history.length > 12 ? _history.sublist(_history.length - 12) : _history;
@@ -388,7 +392,7 @@ class _HomePageState extends State<HomePage> {
         final a64 = j['audio'] as String?;
         if (a64 != null && _talk) {
           if (!spoke && mounted) {
-            setState(() => _info = 'Tilda is speaking... (first words after ${DateTime.now().difference(t0).inMilliseconds} ms)');
+            setState(() => _info = 'Tilda is speaking... (heard you in $heardMs ms, first words ${DateTime.now().difference(t0).inMilliseconds} ms later)');
           }
           spoke = true;
           chain = chain.then((_) async {
