@@ -594,6 +594,11 @@ class _HomePageState extends State<HomePage> {
         _tellBubble('done');
         Future.delayed(const Duration(seconds: 3), () => _tellBubble('idle'));
       }
+      if (_bubbleSession && !_recording && left == 0 && _text.isEmpty) {
+        _bubbleSession = false;
+        if (mounted) setState(() => _info = 'I did not hear any words. Try again, a little closer to the mic.');
+        _tellBubble('idle');
+      }
       if (_talk && _awaitingReply && !_recording && left == 0) {
         _awaitingReply = false;
         if (_text.trim().isEmpty) {
