@@ -510,9 +510,18 @@ class _HomePageState extends State<HomePage> {
       final files = d.listSync().whereType<File>().where((f) => f.path.endsWith('.wav')).toList()
         ..sort((a, b) => a.path.compareTo(b.path));
       var netOk = true;
+      final busy = _recording || _bubbleSession || _talk;
       for (final f in files) {
         final name = _name(f);
         final sess = int.tryParse(name.split('_').first) ?? 0;
+        if (sess != _sess) {
+          // old leftovers must never block what you are saying now
+          if (DateTime.now().millisecondsSinceEpoch - sess > 3 * 3600 * 1000) {
+            await f.delete();
+            continue;
+          }
+          if (busy) continue;
+        }
         if (netOk) {
           try {
             final req = http.MultipartRequest('POST', Uri.parse('${_url.text.trim()}/transcribe'))
