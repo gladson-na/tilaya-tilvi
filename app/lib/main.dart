@@ -150,6 +150,10 @@ class _HomePageState extends State<HomePage> {
   final _style = PersonalStyle();
   final _tts = FlutterTts();
   String _target = 'en-IN';
+  String _source = 'auto';
+  DateTime? _serverBadUntil;
+  DateTime _lastWake = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _wakeT;
   String _translation = '';
   bool _translating = false;
   final _textCtl = TextEditingController();
@@ -199,7 +203,11 @@ class _HomePageState extends State<HomePage> {
     }
     if (Platform.isAndroid) {
       _native.setMethodCallHandler((c) async {
+        if (c.method == 'focus') {
+          if (c.arguments == true) unawaited(_wake());
+        }
         if (c.method == 'toggle') {
+          unawaited(_wake());
           if (_recording) {
             _stop();
           } else {
@@ -219,8 +227,23 @@ class _HomePageState extends State<HomePage> {
       });
     }
     _style.load().then((_) => mounted ? setState(() {}) : null);
-    _asr.check().then((_) => mounted ? setState(() {}) : null);
+    _asr.check().then((_) async {
+      if (mounted) setState(() {});
+      // the phone-only engine is the safety net: fetch it once, by itself
+      if (!_asr.ready && _dl == null) unawaited(_downloadModel());
+    });
+    unawaited(_wake());
+    _wakeT = Timer.periodic(const Duration(minutes: 9), (_) => _wake());
     _flush();
+  }
+
+  /// Wakes the free server (it sleeps after 15 idle minutes) so the first real request is not slow.
+  Future<void> _wake() async {
+    if (DateTime.now().difference(_lastWake).inSeconds < 20) return;
+    _lastWake = DateTime.now();
+    try {
+      await http.get(Uri.parse('${_url.text.trim()}/health')).timeout(const Duration(seconds: 70));
+    } catch (_) {}
   }
 
   Future<Directory> _dir() async {
@@ -295,7 +318,7 @@ class _HomePageState extends State<HomePage> {
       final res = await http
           .post(Uri.parse('${_url.text.trim()}/translate'),
               headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({'text': text, 'source': _sessLang[_shownSess] ?? 'auto', 'target': _target}))
+              body: jsonEncode({'text': text, 'source': _source != 'auto' ? _source : (_sessLang[_shownSess] ?? 'auto'), 'target': _target}))
           .timeout(const Duration(seconds: 25));
       final j = jsonDecode(res.body) as Map<String, dynamic>;
       setState(() => _translation = j['error'] != null ? 'Could not translate: ${j['error']}' : (j['text'] ?? '') as String);
@@ -522,7 +545,8 @@ class _HomePageState extends State<HomePage> {
           }
           if (busy) continue;
         }
-        if (netOk) {
+        final cooling = _serverBadUntil != null && DateTime.now().isBefore(_serverBadUntil!);
+        if (netOk && !cooling) {
           try {
             final req = http.MultipartRequest('POST', Uri.parse('${_url.text.trim()}/transcribe'))
               ..fields['lang'] = _sessLang[sess] ?? 'auto'
@@ -530,7 +554,7 @@ class _HomePageState extends State<HomePage> {
               ..fields['piece'] = name
               ..fields.addAll(_style.hints().isEmpty ? {} : {'hints': _style.hints()})
               ..files.add(await http.MultipartFile.fromPath('audio', f.path));
-            final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 70)));
+            final res = await http.Response.fromStream(await req.send().timeout(Duration(seconds: busy ? 30 : 70)));
             Map<String, dynamic> j;
             try {
               j = jsonDecode(res.body) as Map<String, dynamic>;
@@ -571,6 +595,7 @@ class _HomePageState extends State<HomePage> {
           } catch (e) {
             netOk = false;
             _online = false;
+            _serverBadUntil = DateTime.now().add(const Duration(seconds: 40));
             _lastErr = e.toString().replaceFirst('Exception: ', '');
           }
         }
@@ -580,12 +605,28 @@ class _HomePageState extends State<HomePage> {
             final t = await _asr.transcribe(f.path, _whisper[_sessLang[sess]] ?? '');
             _pieceText[name] = t;
             _rough.add(name);
+            if (_bubbleSession && !_talk && sess == _sess && t.trim().isNotEmpty) {
+              if (await _typeInto(_style.apply(t))) _typedNames.add(name);
+            }
             if (mounted) setState(_refreshText);
           } catch (_) {}
         }
       }
       final left = d.listSync().where((f) => f.path.endsWith('.wav')).length;
-      if (_bubbleSession && !_recording && left == 0 && _text.isNotEmpty) {
+      // pieces of this session that still have no text at all (rough text counts as handled)
+      final waiting = d
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.wav') && _name(f).startsWith(_sess.toString().padLeft(14, '0')) && !_pieceText.containsKey(_name(f)))
+          .length;
+      if ((_bubbleSession || _talk) && !_recording && waiting > 0 && (!netOk || (_serverBadUntil != null && DateTime.now().isBefore(_serverBadUntil!))) && !_asr.ready) {
+        // server is out and the phone-only engine is not on this phone yet: do not hang
+        _bubbleSession = false;
+        _awaitingReply = false;
+        if (mounted) setState(() => _info = 'The server cannot help right now and the offline model is not downloaded yet. Your words are saved and will be typed when it works.');
+        _tellBubble('idle');
+      }
+      if (_bubbleSession && !_recording && waiting == 0 && _text.isNotEmpty) {
         // started from the bubble: type whatever was not typed live, else leave it on the clipboard
         _bubbleSession = false;
         final rest = _pieceText.keys
@@ -603,12 +644,12 @@ class _HomePageState extends State<HomePage> {
         _tellBubble('done');
         Future.delayed(const Duration(seconds: 3), () => _tellBubble('idle'));
       }
-      if (_bubbleSession && !_recording && left == 0 && _text.isEmpty) {
+      if (_bubbleSession && !_recording && waiting == 0 && _text.isEmpty) {
         _bubbleSession = false;
         if (mounted) setState(() => _info = 'I did not hear any words. Try again, a little closer to the mic.');
         _tellBubble('idle');
       }
-      if (_talk && _awaitingReply && !_recording && left == 0) {
+      if (_talk && _awaitingReply && !_recording && waiting == 0) {
         _awaitingReply = false;
         if (_text.trim().isEmpty) {
           await _start();
@@ -644,6 +685,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _retry?.cancel();
+    _wakeT?.cancel();
     _recorder.dispose();
     _textCtl.dispose();
     _textFocus.dispose();
@@ -873,14 +915,28 @@ class _HomePageState extends State<HomePage> {
                 Expanded(
                   child: DropdownButton<String>(
                     isExpanded: true,
+                    value: _source,
+                    items: [
+                      const DropdownMenuItem(value: 'auto', child: Text('From: Auto-detect')),
+                      for (final e in _targets.entries) DropdownMenuItem(value: e.key, child: Text('From: ${e.value}'))
+                    ],
+                    onChanged: (v) => setState(() => _source = v ?? _source),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
                     value: _target,
                     items: [
-                      for (final e in _targets.entries) DropdownMenuItem(value: e.key, child: Text('Translate to ${e.value}'))
+                      for (final e in _targets.entries) DropdownMenuItem(value: e.key, child: Text('To: ${e.value}'))
                     ],
                     onChanged: (v) => setState(() => _target = v ?? _target),
                   ),
                 ),
-                const SizedBox(width: 8),
+              ]),
+              Row(children: [
+                const Spacer(),
                 FilledButton(onPressed: _translating ? null : _translate, child: Text(_translating ? '...' : 'Translate')),
                 IconButton(icon: const Icon(Icons.volume_up), onPressed: _speak),
               ]),
