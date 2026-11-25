@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import 'live_stt.dart';
 import 'offline_asr.dart';
 import 'personal_style.dart';
 
@@ -154,6 +155,18 @@ class _HomePageState extends State<HomePage> {
   DateTime? _serverBadUntil;
   DateTime _lastWake = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _wakeT;
+  final _live = LiveStt();
+  bool _liveOn = true; // word-by-word typing with the phone's own recogniser
+  String _liveLang = '';
+  String _livePhrases = '';
+  String _liveLast = '';
+  bool _liveSession = false;
+  int _emptyTurns = 0;
+  DateTime _lastVoice = DateTime.now();
+  bool _voicedEver = false;
+  int _pieceLoud = 0;
+  bool _closing = false;
+  DateTime? _voiceBadUntil;
   String _translation = '';
   bool _translating = false;
   final _textCtl = TextEditingController();
@@ -191,14 +204,7 @@ class _HomePageState extends State<HomePage> {
     _retry = Timer.periodic(const Duration(seconds: 10), (_) => _flush());
     if (Platform.isAndroid) {
       FlutterOverlayWindow.overlayListener.listen((e) {
-        if (e is Map && e['cmd'] == 'toggle') {
-          if (_recording) {
-            _stop();
-          } else {
-            _bubbleSession = true;
-            _start();
-          }
-        }
+        if (e is Map && e['cmd'] == 'toggle') _bubbleToggle();
       });
     }
     if (Platform.isAndroid) {
@@ -206,15 +212,7 @@ class _HomePageState extends State<HomePage> {
         if (c.method == 'focus') {
           if (c.arguments == true) unawaited(_wake());
         }
-        if (c.method == 'toggle') {
-          unawaited(_wake());
-          if (_recording) {
-            _stop();
-          } else {
-            _bubbleSession = true;
-            _start();
-          }
-        }
+        if (c.method == 'toggle') _bubbleToggle();
       });
     }
     _tts.awaitSpeakCompletion(true);
@@ -237,6 +235,149 @@ class _HomePageState extends State<HomePage> {
     _flush();
   }
 
+  String _liveBase() => _liveLang.isNotEmpty ? _liveLang : (_style.myLangs.isNotEmpty ? _style.myLangs.first : 'en-IN');
+
+  /// Google's code for the recogniser (Odia is "or" there).
+  String _liveCode() => _liveBase() == 'od-IN' ? 'or-IN' : _liveBase();
+
+  void _bubbleToggle() {
+    unawaited(_wake());
+    if (_liveSession) {
+      _stopLive();
+    } else if (_recording) {
+      _stop();
+    } else if (_liveOn && Platform.isAndroid && !_talk) {
+      _startLive();
+    } else {
+      _bubbleSession = true;
+      _start();
+    }
+  }
+
+  /// Word by word into the other app, using the phone's own recogniser.
+  Future<void> _startLive() async {
+    if (_liveSession) return;
+    final ok = await _native.invokeMethod<bool>('liveStart').catchError((_) => false) ?? false;
+    if (!ok) {
+      // not on a text box we can type into: use the normal recorder
+      _bubbleSession = true;
+      await _start();
+      return;
+    }
+    _livePhrases = '';
+    _liveLast = '';
+    _liveSession = true;
+    final started = await _live.start(
+      locale: _liveCode(),
+      onPartial: (t) => _liveType(_livePhrases + t),
+      onPhrase: (t) {
+        _livePhrases = '$_livePhrases$t ';
+        _liveType(_livePhrases);
+      },
+      onEnd: (why) => _stopLive(),
+    );
+    if (!started) {
+      _liveSession = false;
+      _bubbleSession = true;
+      await _start();
+      return;
+    }
+    _tellBubble('recording');
+    if (mounted) setState(() => _info = 'Live: speak, each word is typed as you say it.');
+  }
+
+  void _liveType(String t) {
+    _liveLast = t;
+    _native.invokeMethod('liveSet', t).catchError((_) => false);
+    if (mounted) setState(() => _text = t);
+  }
+
+  Future<void> _stopLive() async {
+    if (!_liveSession) return;
+    _liveSession = false;
+    await _live.stop();
+    if (_liveLast.trim().isNotEmpty) {
+      _tellBubble('done');
+      Future.delayed(const Duration(seconds: 2), () => _tellBubble('idle'));
+      if (mounted) setState(() => _info = 'Typed live.');
+    } else {
+      _tellBubble('idle');
+      if (mounted) setState(() => _info = 'I did not hear any words, so I closed.');
+    }
+  }
+
+  /// Talk mode, listening part: the phone hears you, so the answer can start much sooner.
+  Future<bool> _talkListen() async {
+    _sess = DateTime.now().millisecondsSinceEpoch;
+    _shownSess = _sess;
+    _sessLang[_sess] = _liveBase();
+    _awaitingReply = false;
+    final ok = await _live.start(
+      locale: _liveCode(),
+      onPartial: (t) {
+        if (mounted) setState(() => _text = t);
+      },
+      onPhrase: (t) async {
+        await _live.stop();
+        if (!_talk) return;
+        _stopT = DateTime.now();
+        _text = t;
+        if (mounted) setState(() => _textCtl.text = t);
+        unawaited(_agentTurn());
+      },
+      onEnd: (why) {
+        if (_talk) _endTalk('Nobody spoke, so I stopped listening.');
+      },
+    );
+    if (ok && mounted) setState(() => _info = 'Listening...');
+    return ok;
+  }
+
+  /// Language for the offline engine: the one heard, else the first of your own languages that it knows.
+  String _offlineLang(int sess) {
+    final heard = _whisper[_sessLang[sess]];
+    if (heard != null) return heard;
+    for (final l in _style.myLangs) {
+      final w = _whisper[l];
+      if (w != null) return w;
+    }
+    return 'hi';
+  }
+
+  /// Watches the microphone: silence is never saved, and a quiet bubble session closes by itself.
+  void _watchChunk(Uint8List chunk) {
+    var peak = 0;
+    final bd = ByteData.sublistView(chunk);
+    for (var i = 0; i + 1 < chunk.length; i += 16) {
+      final v = bd.getInt16(i, Endian.little).abs();
+      if (v > peak) peak = v;
+    }
+    if (peak > _pieceLoud) _pieceLoud = peak;
+    final now = DateTime.now();
+    if (peak > 900) {
+      _lastVoice = now;
+      _voicedEver = true;
+    }
+    if (_bubbleSession && !_talk && _recording && !_closing) {
+      final quiet = now.difference(_lastVoice).inSeconds;
+      if (!_voicedEver && quiet >= 8) {
+        unawaited(_quietClose());
+      } else if (_voicedEver && quiet >= 7) {
+        unawaited(_stop());
+      }
+    }
+  }
+
+  Future<void> _quietClose() async {
+    if (_closing) return;
+    _closing = true;
+    _bubbleSession = false;
+    await _stop();
+    _tellBubble('idle');
+    if (mounted) setState(() => _info = 'I did not hear any words, so I closed.');
+    _closing = false;
+  }
+
   /// Wakes the free server (it sleeps after 15 idle minutes) so the first real request is not slow.
   Future<void> _wake() async {
     if (DateTime.now().difference(_lastWake).inSeconds < 20) return;
@@ -257,6 +398,12 @@ class _HomePageState extends State<HomePage> {
       _buf.clear();
       return;
     }
+    final loud = _pieceLoud;
+    _pieceLoud = 0;
+    if (loud < 900) {
+      _buf.clear(); // nothing but silence: let it drop
+      return;
+    }
     final pcm = _buf.takeBytes();
     final d = await _dir();
     final name = '${_sess.toString().padLeft(14, '0')}_${(_seq++).toString().padLeft(5, '0')}.wav';
@@ -266,6 +413,9 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _start() async {
     if (_recording) return;
+    if (_talk && _liveOn && Platform.isAndroid) {
+      if (await _talkListen()) return;
+    }
     if (!await _recorder.hasPermission()) {
       setState(() => _info = 'Microphone permission is needed.');
       return;
@@ -275,10 +425,14 @@ class _HomePageState extends State<HomePage> {
     _seq = 0;
     _shownSess = _sess;
     _buf.clear();
+    _pieceLoud = 0;
+    _voicedEver = false;
+    _lastVoice = DateTime.now();
     final stream = await _recorder.startStream(
         const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1));
     _sub = stream.listen((chunk) {
       _buf.add(chunk);
+      _watchChunk(chunk);
       if (_buf.length >= (_bubbleSession ? 4 : _pieceSeconds) * _bytesPerSecond) _savePiece();
     });
     _tellBubble('recording');
@@ -380,6 +534,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _endTalk(String why) async {
     _talk = false;
+    await _live.stop();
     await _ampSub?.cancel();
     _ampSub = null;
     try {
@@ -412,7 +567,10 @@ class _HomePageState extends State<HomePage> {
       await for (final line in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
         if (line.trim().isEmpty) continue;
         final j = jsonDecode(line) as Map<String, dynamic>;
-        if (j['error'] != null) _lastErr = '${j['error']}';
+        if (j['error'] != null) {
+          _lastErr = '${j['error']}';
+          _voiceBadUntil = DateTime.now().add(const Duration(seconds: 90));
+        }
         final t = (j['text'] ?? '') as String;
         if (t.isNotEmpty) answer = answer.isEmpty ? t : '$answer $t';
         final a64 = j['audio'] as String?;
@@ -447,6 +605,7 @@ class _HomePageState extends State<HomePage> {
   /// Speaks with Sarvam's voice; falls back to the phone's own voice if the server cannot.
   Future<void> _say(String text, String lang) async {
     try {
+      if (_voiceBadUntil != null && DateTime.now().isBefore(_voiceBadUntil!)) throw Exception('server voice is down, using the phone voice');
       final res = await http
           .post(Uri.parse('${_url.text.trim()}/speak'),
               headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang}))
@@ -458,6 +617,7 @@ class _HomePageState extends State<HomePage> {
       await done.timeout(const Duration(seconds: 90));
     } catch (e) {
       _lastErr = 'voice: $e';
+      _voiceBadUntil = DateTime.now().add(const Duration(seconds: 90));
       try {
         await _tts.setLanguage(lang);
         await _tts.speak(text);
@@ -537,14 +697,12 @@ class _HomePageState extends State<HomePage> {
       for (final f in files) {
         final name = _name(f);
         final sess = int.tryParse(name.split('_').first) ?? 0;
-        if (sess != _sess) {
-          // old leftovers must never block what you are saying now
-          if (DateTime.now().millisecondsSinceEpoch - sess > 3 * 3600 * 1000) {
-            await f.delete();
-            continue;
-          }
-          if (busy) continue;
+        // nobody waits more than 30 seconds: older pieces just drop
+        if (DateTime.now().difference(f.lastModifiedSync()).inSeconds > 30) {
+          await f.delete();
+          continue;
         }
+        if (sess != _sess && busy) continue;
         final cooling = _serverBadUntil != null && DateTime.now().isBefore(_serverBadUntil!);
         if (netOk && !cooling) {
           try {
@@ -602,7 +760,7 @@ class _HomePageState extends State<HomePage> {
         // no network: rough on-device text so the words are visible right away
         if (_asr.ready && !_pieceText.containsKey(name)) {
           try {
-            final t = await _asr.transcribe(f.path, _whisper[_sessLang[sess]] ?? '');
+            final t = await _asr.transcribe(f.path, _offlineLang(sess));
             _pieceText[name] = t;
             _rough.add(name);
             if (_bubbleSession && !_talk && sess == _sess && t.trim().isNotEmpty) {
@@ -652,8 +810,14 @@ class _HomePageState extends State<HomePage> {
       if (_talk && _awaitingReply && !_recording && waiting == 0) {
         _awaitingReply = false;
         if (_text.trim().isEmpty) {
-          await _start();
+          if (++_emptyTurns >= 2) {
+            _emptyTurns = 0;
+            await _endTalk('Nobody spoke, so I closed.');
+          } else {
+            await _start();
+          }
         } else {
+          _emptyTurns = 0;
           unawaited(_agentTurn());
         }
       }
@@ -686,6 +850,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _retry?.cancel();
     _wakeT?.cancel();
+    _live.stop();
     _recorder.dispose();
     _textCtl.dispose();
     _textFocus.dispose();
@@ -730,6 +895,20 @@ class _HomePageState extends State<HomePage> {
                     _native.invokeMethod('auto', v).catchError((_) {});
                   },
                 ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Live words (instant)'),
+                  subtitle: const Text('Types and hears each word as you say it, using the phone\'s own speech engine. Free, no server.'),
+                  value: _liveOn,
+                  onChanged: (v) => setSheet(() => _liveOn = v),
+                ),
+                if (_liveOn)
+                  DropdownButton<String>(
+                    isExpanded: true,
+                    value: _targets.containsKey(_liveBase()) ? _liveBase() : 'en-IN',
+                    items: [for (final e in _targets.entries) DropdownMenuItem(value: e.key, child: Text('Live language: ${e.value}'))],
+                    onChanged: (v) => setSheet(() => _liveLang = v ?? _liveLang),
+                  ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Read it back to me'),

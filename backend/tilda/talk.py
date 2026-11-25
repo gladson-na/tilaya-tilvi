@@ -15,8 +15,39 @@ LANG_NAMES = {"hi-IN": "Hindi", "bn-IN": "Bengali", "ta-IN": "Tamil", "te-IN": "
               "od-IN": "Odia", "en-IN": "English"}
 
 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
+
 class TalkError(Exception):
     pass
+
+
+def groq_reply(messages, lang: str) -> str:
+    """Backup brain when Sarvam cannot answer: open Llama on Groq's free tier. Needs GROQ_API_KEY."""
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise TalkError("no GROQ_API_KEY")
+    turns = [{"role": m["role"], "content": str(m["content"])[:1500]}
+             for m in (messages or []) if m.get("role") in ("user", "assistant")][-12:]
+    if not turns:
+        raise TalkError("nothing to answer")
+    last = None
+    for model in GROQ_MODELS:
+        r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"},
+                          json={"model": model, "messages": [{"role": "system", "content": system_prompt(lang)}] + turns,
+                                "temperature": 0.4, "max_tokens": 300}, timeout=25)
+        if r.status_code == 200:
+            try:
+                out = clean(r.json()["choices"][0]["message"]["content"])
+            except (KeyError, IndexError, ValueError):
+                last = "unexpected groq answer"
+                continue
+            if out:
+                return out
+        else:
+            last = f"groq chat http {r.status_code}: {r.text[:160]}"
+    raise TalkError(last or "no groq answer")
 
 
 def _key(api_key=None):
@@ -65,7 +96,10 @@ def reply(messages, lang: str, api_key=None) -> str:
             last = "empty answer"
         else:
             last = f"sarvam chat http {r.status_code}: {r.text[:200]}"
-    raise TalkError(last or "no answer")
+    try:
+        return groq_reply(messages, lang)
+    except TalkError as e:
+        raise TalkError(f"{last or 'no answer'}; backup: {e}")
 
 
 def speak(text: str, lang: str, speaker: str = None, api_key=None) -> str:
@@ -108,7 +142,12 @@ def stream_turn(messages, lang: str, api_key=None):
         timeout=40, stream=True,
     )
     if r.status_code != 200:
-        raise TalkError(f"sarvam chat http {r.status_code}: {r.text[:200]}")
+        # Sarvam cannot answer (no credits, outage): the backup brain answers, the phone speaks it
+        try:
+            yield {"text": groq_reply(messages, lang), "error": f"sarvam chat http {r.status_code}, answered by groq"}
+            return
+        except TalkError as e:
+            raise TalkError(f"sarvam chat http {r.status_code}: {r.text[:120]}; backup: {e}")
     buf, sent = "", 0
 
     def out(text):
