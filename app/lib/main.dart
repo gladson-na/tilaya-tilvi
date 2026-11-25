@@ -157,7 +157,7 @@ class _HomePageState extends State<HomePage> {
   Timer? _wakeT;
   final _live = LiveStt();
   bool _liveOn = true; // word-by-word typing with the phone's own recogniser
-  String _liveLang = '';
+  String _liveLang = 'en-IN'; // long-press the bubble to switch
   String _livePhrases = '';
   String _liveLast = '';
   bool _liveSession = false;
@@ -213,6 +213,7 @@ class _HomePageState extends State<HomePage> {
           if (c.arguments == true) unawaited(_wake());
         }
         if (c.method == 'toggle') _bubbleToggle();
+        if (c.method == 'longpress') _nextLiveLang();
       });
     }
     _tts.awaitSpeakCompletion(true);
@@ -235,10 +236,28 @@ class _HomePageState extends State<HomePage> {
     _flush();
   }
 
-  String _liveBase() => _liveLang.isNotEmpty ? _liveLang : (_style.myLangs.isNotEmpty ? _style.myLangs.first : 'en-IN');
+  String _liveBase() => _liveLang.isNotEmpty ? _liveLang : 'en-IN';
 
   /// Google's code for the recogniser (Odia is "or" there).
   String _liveCode() => _liveBase() == 'od-IN' ? 'or-IN' : _liveBase();
+
+  static const _short = {
+    'en-IN': 'EN', 'hi-IN': 'हि', 'od-IN': 'ଓଡ଼', 'bn-IN': 'বা', 'te-IN': 'తె', 'ta-IN': 'த',
+    'kn-IN': 'ಕ', 'ml-IN': 'മ', 'mr-IN': 'मर', 'gu-IN': 'ગુ', 'pa-IN': 'ਪੰ',
+  };
+
+  /// Long-press on the bubble: switch the live language (English, Hindi, ...) and show it on the bubble.
+  void _nextLiveLang() {
+    final langs = _style.myLangs.toList();
+    if (!langs.contains('en-IN')) langs.insert(0, 'en-IN');
+    final i = langs.indexOf(_liveBase());
+    final next = langs[(i + 1) % langs.length];
+    setState(() {
+      _liveLang = next;
+      _info = 'Live language: ${_targets[next] ?? next}';
+    });
+    _native.invokeMethod('label', _short[next] ?? next.substring(0, 2).toUpperCase()).catchError((_) => false);
+  }
 
   void _bubbleToggle() {
     unawaited(_wake());
