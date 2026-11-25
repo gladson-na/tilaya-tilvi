@@ -23,7 +23,7 @@ class TalkError(Exception):
     pass
 
 
-def groq_reply(messages, lang: str) -> str:
+def groq_reply(messages, lang: str, extra: str = "") -> str:
     """Backup brain when Sarvam cannot answer: open Llama on Groq's free tier. Needs GROQ_API_KEY."""
     key = os.environ.get("GROQ_API_KEY")
     if not key:
@@ -35,7 +35,7 @@ def groq_reply(messages, lang: str) -> str:
     last = None
     for model in GROQ_MODELS:
         r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"},
-                          json={"model": model, "messages": [{"role": "system", "content": system_prompt(lang)}] + turns,
+                          json={"model": model, "messages": [{"role": "system", "content": system_prompt(lang, extra)}] + turns,
                                 "temperature": 0.4, "max_tokens": 300}, timeout=25)
         if r.status_code == 200:
             try:
@@ -57,11 +57,16 @@ def _key(api_key=None):
     return k
 
 
-def system_prompt(lang: str) -> str:
+def system_prompt(lang: str, extra: str = "") -> str:
     name = LANG_NAMES.get(lang, "the user's language")
-    return (f"You are Tilda, a friendly voice assistant talking with someone out loud. Reply in {name}, "
+    from .tools import now_text
+    base = (f"You are Tilda, a friendly voice assistant talking with someone out loud. Reply in {name}, "
             "in the same script the person uses. Keep answers to one to three short sentences, plain speech, "
-            "You are a woman, so use feminine forms of speech where the language has them. no lists, no markdown, no emojis. If you are not sure, say so briefly. Ask at most one question back.")
+            "You are a woman, so use feminine forms of speech where the language has them. no lists, no markdown, no emojis. "
+            "If you are not sure, say so briefly. Ask at most one question back. "
+            f"The date and time now: {now_text()}. You can only know today's weather, distances and sums from a LIVE DATA line "
+            "in this message. Without one, never invent them: say you could not check.")
+    return base + (" " + extra if extra else "")
 
 
 def clean(text: str) -> str:
@@ -70,7 +75,7 @@ def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def reply(messages, lang: str, api_key=None) -> str:
+def reply(messages, lang: str, api_key=None, extra: str = "") -> str:
     key = _key(api_key)
     turns = [{"role": m["role"], "content": str(m["content"])[:1500]}
              for m in (messages or []) if m.get("role") in ("user", "assistant")][-12:]
@@ -81,7 +86,7 @@ def reply(messages, lang: str, api_key=None) -> str:
         r = requests.post(
             CHAT_URL,
             headers={"api-subscription-key": key, "Content-Type": "application/json"},
-            json={"model": model, "messages": [{"role": "system", "content": system_prompt(lang)}] + turns,
+            json={"model": model, "messages": [{"role": "system", "content": system_prompt(lang, extra)}] + turns,
                   "temperature": 0.4, "max_tokens": 300, "reasoning_effort": None},
             timeout=40,
         )
@@ -97,7 +102,7 @@ def reply(messages, lang: str, api_key=None) -> str:
         else:
             last = f"sarvam chat http {r.status_code}: {r.text[:200]}"
     try:
-        return groq_reply(messages, lang)
+        return groq_reply(messages, lang, extra)
     except TalkError as e:
         raise TalkError(f"{last or 'no answer'}; backup: {e}")
 
@@ -127,7 +132,7 @@ def speak(text: str, lang: str, speaker: str = None, api_key=None) -> str:
 _END = re.compile(r"(?<=[.!?\u0964\u0965])\s+")
 
 
-def stream_turn(messages, lang: str, api_key=None):
+def stream_turn(messages, lang: str, api_key=None, extra: str = ""):
     """Yields {"text", "audio"} one sentence at a time, so Tilda starts talking after the first sentence."""
     key = _key(api_key)
     turns = [{"role": m["role"], "content": str(m["content"])[:1500]}
@@ -137,14 +142,14 @@ def stream_turn(messages, lang: str, api_key=None):
     r = requests.post(
         CHAT_URL,
         headers={"api-subscription-key": key, "Content-Type": "application/json"},
-        json={"model": CHAT_MODELS[0], "messages": [{"role": "system", "content": system_prompt(lang)}] + turns,
+        json={"model": CHAT_MODELS[0], "messages": [{"role": "system", "content": system_prompt(lang, extra)}] + turns,
               "temperature": 0.4, "max_tokens": 300, "reasoning_effort": None, "stream": True},
         timeout=40, stream=True,
     )
     if r.status_code != 200:
         # Sarvam cannot answer (no credits, outage): the backup brain answers, the phone speaks it
         try:
-            yield {"text": groq_reply(messages, lang), "error": f"sarvam chat http {r.status_code}, answered by groq"}
+            yield {"text": groq_reply(messages, lang, extra), "error": f"sarvam chat http {r.status_code}, answered by groq"}
             return
         except TalkError as e:
             raise TalkError(f"sarvam chat http {r.status_code}: {r.text[:120]}; backup: {e}")

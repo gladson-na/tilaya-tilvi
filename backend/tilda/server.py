@@ -17,7 +17,8 @@ from .engines import Engine, EngineError, Result, SarvamEngine, WhisperEngine, d
 from .greetings import BETA, GREETINGS, detect_greeting, rank_by_followup
 from .router import AllEnginesFailed, transcribe
 from .talk import TalkError, reply as talk_reply, speak as talk_speak, stream_turn as talk_stream
-from .translate import TranslateError, translate
+from . import tools
+from .translate import TranslateError, translate, transliterate
 
 app = Flask(__name__, static_folder="static")
 
@@ -117,17 +118,67 @@ def talk_route():
     j = request.get_json(silent=True) or {}
     msgs, lang = j.get("messages", []), j.get("lang", "en-IN")
 
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    lat, lon = num(j.get("lat")), num(j.get("lon"))
+
     def gen():
         try:
             if os.environ.get("TILDA_FAKE"):
                 yield json.dumps({"text": talk_reply(msgs, lang)}) + "\n"
                 return
-            for item in talk_stream(msgs, lang):
+            ctx = tools.context_for(msgs, lat, lon)
+            if ctx["intent"]:
+                yield json.dumps({"intent": ctx["intent"]}) + "\n"
+            for item in talk_stream(msgs, lang, extra=ctx["extra"]):
                 yield json.dumps(item) + "\n"
         except TalkError as e:
             yield json.dumps({"error": str(e)}) + "\n"
+        except Exception as e:  # a failing lookup must never leave the person in silence
+            app.logger.error("talk crashed: %s", e)
+            yield json.dumps({"error": "talk unavailable"}) + "\n"
 
     return Response(gen(), mimetype="application/x-ndjson", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
+@app.post("/feedback")
+def feedback():
+    j = request.get_json(silent=True) or {}
+    kind, text = j.get("kind", "suggestion"), str(j.get("text", "")).strip()[:2000]
+    if kind not in ("complaint", "suggestion") or not text:
+        return jsonify(error="say what the complaint or suggestion is"), 400
+    return jsonify(tools.save_feedback(kind, text, str(j.get("lang", ""))[:12], str(j.get("who", ""))[:60]))
+
+
+@app.post("/summary")
+def do_summary():
+    j = request.get_json(silent=True) or {}
+    text, lang = str(j.get("text", "")).strip(), j.get("lang", "en-IN")
+    if len(text) < 20:
+        return jsonify(error="not enough words to summarise yet"), 400
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(text="Notes\n- (demo) " + text[:80])
+    try:
+        from .translate import NAMES
+        return jsonify(text=tools.summarize(text, NAMES.get(lang, "English")))
+    except tools.ToolError as e:
+        return jsonify(error=str(e)), 502
+
+
+@app.post("/translit")
+def do_translit():
+    j = request.get_json(silent=True) or {}
+    text, source, target = j.get("text", ""), j.get("source", "auto"), j.get("target", "hi-IN")
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(text=f"(demo letters in {target}) {text}", target=target)
+    try:
+        return jsonify(text=transliterate(text, source, target), target=target)
+    except TranslateError as e:
+        return jsonify(error=str(e)), 502
 
 
 @app.post("/speak")
@@ -178,7 +229,7 @@ def do_transcribe():
     first_chain, main_chain = chains()
     log, greeting_langs, said = [], None, ""
     try:
-        if forced == "auto":
+        if forced == "auto" and request.form.get("fast") != "1":  # fast: long notes skip the greeting check
             try:
                 first, first_log = transcribe(wav, "unknown", first_chain, timeout=8)
                 said = first.text

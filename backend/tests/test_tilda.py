@@ -1,3 +1,4 @@
+import json
 import time
 import pytest
 from tilda.engines import Engine, EngineError, Result
@@ -342,3 +343,134 @@ def test_translate_falls_back_to_groq(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "g")
     monkeypatch.setattr(tr.requests, "post", fake_post)
     assert tr.translate("hello", "en-IN", "hi-IN") == "नमस्ते"
+
+
+# ---- live facts, sums, feedback, letters in another script ----
+
+def test_sums_are_exact():
+    from tilda import tools
+    lines, total = tools.total_of([{"name": "biscuits", "qty": 50, "price": 10}, {"name": "shampoo", "qty": 5, "price": 35}])
+    assert total == "675" and lines[0] == "biscuits: 50 at 10 is 500"
+    assert tools.total_of([{"name": "tea", "qty": 3, "price": 12.5}])[1] == "37.5"
+    assert tools.total_of([{"name": "x", "qty": "1,000", "price": 2}])[1] == "2000"
+
+
+def test_calc_context_uses_code_not_the_model(monkeypatch):
+    from tilda import tools
+    monkeypatch.setattr(tools, "llm_json", lambda s, u: {"items": [{"name": "biscuits", "qty": 50, "price": 10}, {"name": "shampoo", "qty": 5, "price": 35}]})
+    got = tools.context_for([{"role": "user", "content": "I sold 50 biscuits at 10 rupees and 5 shampoo at 35, what is the total"}])
+    assert got["intent"] == "calc" and "TOTAL = 675" in got["extra"]
+
+
+def test_weather_context(monkeypatch):
+    from tilda import tools
+
+    class R:
+        status_code = 200
+
+        def json(self):
+            return {"current": {"temperature_2m": 27.4, "apparent_temperature": 30, "relative_humidity_2m": 70, "weather_code": 2, "wind_speed_10m": 11}}
+
+    monkeypatch.setattr(tools.requests, "get", lambda *a, **k: R())
+    got = tools.context_for([{"role": "user", "content": "what is the weather"}], 19.07, 72.87)
+    assert got["intent"] == "weather" and "27 degrees" in got["extra"] and "partly cloudy" in got["extra"]
+    nogps = tools.context_for([{"role": "user", "content": "what is the weather"}])
+    assert "not shared" in nogps["extra"]
+
+
+def test_distance_context(monkeypatch):
+    from tilda import tools
+    monkeypatch.setattr(tools, "llm_json", lambda s, u: {"place": "Gateway of India, Mumbai"})
+
+    class G:
+        status_code = 200
+
+        def __init__(self, data):
+            self.data = data
+
+        def json(self):
+            return self.data
+
+    def fake_get(url, **k):
+        if "nominatim" in url:
+            return G([{"lat": "18.92", "lon": "72.83", "display_name": "Gateway of India, Mumbai"}])
+        return G({"routes": [{"distance": 8400, "duration": 1500}]})
+
+    monkeypatch.setattr(tools.requests, "get", fake_get)
+    got = tools.context_for([{"role": "user", "content": "how far is Gateway of India"}], 19.1, 72.9)
+    assert got["intent"] == "distance" and "8.4 km" in got["extra"] and "25 minutes" in got["extra"]
+
+
+def test_failed_lookup_never_guesses(monkeypatch):
+    from tilda import tools
+
+    def boom(*a, **k):
+        raise tools.requests.RequestException("down")
+
+    monkeypatch.setattr(tools.requests, "get", boom)
+    got = tools.context_for([{"role": "user", "content": "what is the weather"}], 1, 2)
+    assert got["intent"] == "failed" and "Do not guess" in got["extra"]
+
+
+def test_feedback_is_kept_and_complaint_detected(tmp_path, monkeypatch):
+    from tilda import server, tools
+    monkeypatch.setenv("FEEDBACK_LOG", str(tmp_path / "f.jsonl"))
+    got = tools.context_for([{"role": "user", "content": "I have a complaint about the app"}])
+    assert got["intent"] == "complaint" and "never promise" in got["extra"]
+    c = server.app.test_client()
+    r = c.post("/feedback", json={"kind": "suggestion", "text": "add Odia notes", "lang": "od-IN"})
+    assert r.get_json()["saved"] is True
+    assert "add Odia notes" in (tmp_path / "f.jsonl").read_text()
+    assert c.post("/feedback", json={"kind": "complaint", "text": ""}).status_code == 400
+
+
+def test_talk_route_sends_intent_and_extra(monkeypatch):
+    from tilda import server
+    seen = {}
+    monkeypatch.setattr(server.tools, "context_for", lambda m, lat, lon: {"intent": "weather", "extra": f"LIVE DATA {lat} {lon}"})
+
+    def fake_stream(msgs, lang, api_key=None, extra=""):
+        seen["extra"] = extra
+        yield {"text": "It is warm."}
+
+    monkeypatch.setattr(server, "talk_stream", fake_stream)
+    r = server.app.test_client().post("/talk", json={"messages": [{"role": "user", "content": "weather"}], "lang": "en-IN", "lat": 19.1, "lon": 72.9})
+    lines = [json.loads(x) for x in r.get_data(as_text=True).splitlines()]
+    assert lines[0] == {"intent": "weather"} and lines[1]["text"] == "It is warm." and seen["extra"] == "LIVE DATA 19.1 72.9"
+
+
+def test_translit_falls_back_to_groq(monkeypatch):
+    from tilda import translate
+
+    class Down:
+        status_code = 402
+        text = "no credits"
+
+        def json(self):
+            return {}
+
+    class Ok:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "आज वी विल सी"}}]}
+
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    monkeypatch.setattr(translate.requests, "post", lambda url, **k: Down() if "sarvam" in url else Ok())
+    assert translate.transliterate("today we see", "en-IN", "hi-IN") == "आज वी विल सी"
+
+
+def test_system_prompt_carries_live_data_and_time():
+    from tilda import talk
+    p = talk.system_prompt("hi-IN", "LIVE DATA: 27 degrees")
+    assert "LIVE DATA: 27 degrees" in p and "IST" in p and "never invent" in p
+
+
+def test_summary_route(monkeypatch):
+    from tilda import server
+    monkeypatch.setattr(server.tools, "summarize", lambda t, n: f"Notes in {n}\n- point")
+    c = server.app.test_client()
+    assert c.post("/summary", json={"text": "short"}).status_code == 400
+    r = c.post("/summary", json={"text": "a long class about photosynthesis in plants " * 3, "lang": "hi-IN"})
+    assert r.get_json()["text"].startswith("Notes in Hindi")
