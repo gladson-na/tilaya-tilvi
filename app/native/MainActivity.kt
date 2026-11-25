@@ -22,6 +22,15 @@ class MainActivity : FlutterActivity() {
                 "state" -> { TildaService.instance?.setState(call.arguments as String); res.success(true) }
                 "auto" -> { TildaService.auto = call.arguments as Boolean; res.success(true) }
                 "enabled" -> res.success(TildaService.instance != null)
+                "notesOn" -> {
+                    try {
+                        val i = Intent(this, NotesService::class.java)
+                        if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                        res.success(true)
+                    } catch (e: Exception) { res.success(false) }
+                }
+                "notesOff" -> { stopService(Intent(this, NotesService::class.java)); res.success(true) }
+                "toBack" -> { moveTaskToBack(true); res.success(true) }
                 "settings" -> {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     res.success(true)

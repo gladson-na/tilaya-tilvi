@@ -465,3 +465,12 @@ def test_system_prompt_carries_live_data_and_time():
     from tilda import talk
     p = talk.system_prompt("hi-IN", "LIVE DATA: 27 degrees")
     assert "LIVE DATA: 27 degrees" in p and "IST" in p and "never invent" in p
+
+
+def test_summary_route(monkeypatch):
+    from tilda import server
+    monkeypatch.setattr(server.tools, "summarize", lambda t, n: f"Notes in {n}\n- point")
+    c = server.app.test_client()
+    assert c.post("/summary", json={"text": "short"}).status_code == 400
+    r = c.post("/summary", json={"text": "a long class about photosynthesis in plants " * 3, "lang": "hi-IN"})
+    assert r.get_json()["text"].startswith("Notes in Hindi")

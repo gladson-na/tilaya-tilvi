@@ -12,6 +12,8 @@ class PersonalStyle {
   bool shareHints = false; // send the word list as a hint with each recording (off by default)
   bool keepAudio = false; // keep reviewed recordings on this phone for later personal training (off by default)
   final Set<String> myLangs = {'hi-IN', 'od-IN', 'en-IN'}; // languages the user speaks; guides detection
+  bool setupDone = false; // the first-run language question has been answered
+  String notesLang = 'hi-IN'; // the language notes are also written or translated into
   bool firstDone = false; // the first successful dictation has happened
   double trainedSeconds = 0; // reviewed speech collected so far
   File? _file;
@@ -44,6 +46,8 @@ class PersonalStyle {
           ..addAll((j['myLangs'] as List).cast<String>());
       }
       firstDone = j['firstDone'] == true;
+      setupDone = j['setupDone'] == true;
+      if (j['notesLang'] is String) notesLang = j['notesLang'] as String;
       trainedSeconds = ((j['trainedSeconds'] ?? 0) as num).toDouble();
     } catch (_) {}
   }
@@ -58,6 +62,8 @@ class PersonalStyle {
           'keepAudio': keepAudio,
           'myLangs': myLangs.toList(),
           'firstDone': firstDone,
+          'setupDone': setupDone,
+          'notesLang': notesLang,
           'trainedSeconds': trainedSeconds,
         }),
         flush: true);

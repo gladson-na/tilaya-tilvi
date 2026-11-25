@@ -217,3 +217,30 @@ def _email(rec: dict) -> bool:
         return r.status_code in (200, 201)
     except requests.RequestException:
         return False
+
+
+def summarize(text: str, lang_name: str) -> str:
+    """Short study notes from a long transcript (Groq first, Sarvam as backup). Keeps line breaks."""
+    system = (f"You make study notes from a class or video transcript. Write in {lang_name}. A short title line, then 5 to 9 "
+              "bullet points starting with '- ', then one line starting 'Remember:' with the single most important thing. "
+              "Use only what the transcript says. No markdown symbols other than the leading dashes.")
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": text[-12000:]}]
+    gkey, skey = os.environ.get("GROQ_API_KEY"), os.environ.get("SARVAM_API_KEY")
+    if gkey:
+        try:
+            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {gkey}"}, timeout=40,
+                              json={"model": "llama-3.3-70b-versatile", "temperature": 0.2, "max_tokens": 900, "messages": msgs})
+            if r.status_code == 200:
+                return (r.json()["choices"][0]["message"]["content"] or "").strip()
+        except (requests.RequestException, KeyError, IndexError, ValueError):
+            pass
+    if skey:
+        try:
+            r = requests.post(SARVAM_CHAT, headers={"api-subscription-key": skey}, timeout=50,
+                              json={"model": "sarvam-105b-conversations", "temperature": 0.2, "max_tokens": 900,
+                                    "reasoning_effort": None, "messages": msgs})
+            if r.status_code == 200:
+                return (r.json()["choices"][0]["message"]["content"] or "").strip()
+        except (requests.RequestException, KeyError, IndexError, ValueError):
+            pass
+    raise ToolError("no summary engine answered")

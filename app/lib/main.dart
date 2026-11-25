@@ -15,6 +15,12 @@ import 'package:record/record.dart';
 import 'live_stt.dart';
 import 'offline_asr.dart';
 import 'personal_style.dart';
+import 'api.dart';
+import 'screen_home.dart';
+import 'screen_notes.dart';
+import 'screen_talk.dart';
+import 'screen_translate.dart';
+import 'widgets.dart';
 
 void main() => runApp(const TildaApp());
 
@@ -87,6 +93,7 @@ class TildaApp extends StatelessWidget {
             colorSchemeSeed: Colors.teal,
             brightness: Brightness.dark,
             useMaterial3: true),
+        themeMode: ThemeMode.dark,
         home: const HomePage(),
       );
 }
@@ -122,13 +129,7 @@ Uint8List _wav(Uint8List pcm) {
 }
 
 /// Languages the translator can write into (Sarvam covers the 22 official languages plus English).
-const _targets = {
-  'en-IN': 'English', 'hi-IN': 'Hindi', 'te-IN': 'Telugu', 'ta-IN': 'Tamil', 'kn-IN': 'Kannada',
-  'ml-IN': 'Malayalam', 'mr-IN': 'Marathi', 'gu-IN': 'Gujarati', 'bn-IN': 'Bengali', 'pa-IN': 'Punjabi',
-  'od-IN': 'Odia', 'as-IN': 'Assamese', 'ur-IN': 'Urdu', 'ne-IN': 'Nepali', 'kok-IN': 'Konkani',
-  'mai-IN': 'Maithili', 'doi-IN': 'Dogri', 'ks-IN': 'Kashmiri', 'sd-IN': 'Sindhi', 'sa-IN': 'Sanskrit',
-  'sat-IN': 'Santali', 'mni-IN': 'Manipuri', 'brx-IN': 'Bodo',
-};
+const _targets = kLangs;
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -146,6 +147,8 @@ class _HomePageState extends State<HomePage> {
   Directory? _queue;
   int _sess = 0, _seq = 0, _downAt = 0;
   bool _recording = false, _flushing = false;
+  bool _styleLoaded = false;
+  final _tick = ValueNotifier<int>(0);
   String _lastErr = '';  // why the last upload failed, shown instead of a vague 'no network'
   final _asr = OfflineAsr();
   final _style = PersonalStyle();
@@ -225,7 +228,7 @@ class _HomePageState extends State<HomePage> {
         } catch (_) {}
       });
     }
-    _style.load().then((_) => mounted ? setState(() {}) : null);
+    _style.load().then((_) => mounted ? setState(() => _styleLoaded = true) : null);
     _asr.check().then((_) async {
       if (mounted) setState(() {});
       // the phone-only engine is the safety net: fetch it once, by itself
@@ -234,6 +237,38 @@ class _HomePageState extends State<HomePage> {
     unawaited(_wake());
     _wakeT = Timer.periodic(const Duration(minutes: 9), (_) => _wake());
     _flush();
+  }
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _tick.value++; // keeps the old test screen alive when it is opened from settings
+  }
+
+  void _open(Widget w) {
+    Api.base = _url.text.trim();
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
+  }
+
+  void _openClassic() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => ValueListenableBuilder<int>(valueListenable: _tick, builder: (c, _, __) => _classicBuild(c))));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_styleLoaded) {
+      return const Scaffold(backgroundColor: kNavy, body: Center(child: CircularProgressIndicator()));
+    }
+    if (!_style.setupDone) {
+      return SetupScreen(style: _style, onDone: () => setState(() {}));
+    }
+    return HomeScreen(
+      onTalk: () => _open(TalkScreen(style: _style)),
+      onNotes: () => _open(NotesScreen(style: _style)),
+      onTranslate: () => _open(TranslateScreen(style: _style)),
+      onSettings: _openSettings,
+    );
   }
 
   String _liveBase() => _liveLang.isNotEmpty ? _liveLang : 'en-IN';
@@ -874,6 +909,7 @@ class _HomePageState extends State<HomePage> {
     _textCtl.dispose();
     _textFocus.dispose();
     _url.dispose();
+    _tick.dispose();
     _svcT?.cancel();
     super.dispose();
   }
@@ -894,6 +930,31 @@ class _HomePageState extends State<HomePage> {
           child: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               TextField(controller: _url, decoration: const InputDecoration(labelText: 'Server address')),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('My languages'),
+                subtitle: Text(_style.myLangs.map((c) => _targets[c] ?? c).join(', ')),
+                trailing: TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _style.setupDone = false;
+                    setState(() {});
+                  },
+                  child: const Text('Change'),
+                ),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Old test screen'),
+                subtitle: const Text('The first version, for checking things.'),
+                trailing: TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _openClassic();
+                  },
+                  child: const Text('Open'),
+                ),
+              ),
               if (Platform.isAndroid) ...[
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -1003,10 +1064,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// One screen, no scrolling: everything a screenshot needs is visible at once.
-  @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget _classicBuild(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: const Text('Tilda'),
+          title: const Text('Tilda test screen'),
           actions: [IconButton(icon: const Icon(Icons.settings), onPressed: _openSettings)],
         ),
         body: SafeArea(

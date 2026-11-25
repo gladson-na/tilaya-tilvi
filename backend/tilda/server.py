@@ -154,6 +154,21 @@ def feedback():
     return jsonify(tools.save_feedback(kind, text, str(j.get("lang", ""))[:12], str(j.get("who", ""))[:60]))
 
 
+@app.post("/summary")
+def do_summary():
+    j = request.get_json(silent=True) or {}
+    text, lang = str(j.get("text", "")).strip(), j.get("lang", "en-IN")
+    if len(text) < 20:
+        return jsonify(error="not enough words to summarise yet"), 400
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(text="Notes\n- (demo) " + text[:80])
+    try:
+        from .translate import NAMES
+        return jsonify(text=tools.summarize(text, NAMES.get(lang, "English")))
+    except tools.ToolError as e:
+        return jsonify(error=str(e)), 502
+
+
 @app.post("/translit")
 def do_translit():
     j = request.get_json(silent=True) or {}
