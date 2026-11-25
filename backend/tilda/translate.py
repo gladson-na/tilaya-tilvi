@@ -74,3 +74,43 @@ def sarvam_translate(text: str, source: str, target: str, api_key: str | None = 
     if r.status_code != 200:
         raise TranslateError(f"sarvam http {r.status_code}")
     return r.json().get("translated_text", "")
+
+
+def groq_translit(text: str, target: str) -> str:
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise TranslateError("no GROQ_API_KEY")
+    prompt = (f"Write the user's text in {NAMES.get(target, target)} script, exactly as it sounds. Do not translate: keep the "
+              f"same words, spelling foreign words the way {NAMES.get(target, target)} speakers write them. If it is already in "
+              "that script, return it unchanged. Reply with the result only.")
+    r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
+                      json={"model": "llama-3.3-70b-versatile", "temperature": 0.1, "max_tokens": 700,
+                            "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": text[:1000]}]},
+                      timeout=25)
+    if r.status_code != 200:
+        raise TranslateError(f"groq http {r.status_code}")
+    return (r.json()["choices"][0]["message"]["content"] or "").strip()
+
+
+def transliterate(text: str, source: str, target: str, api_key: str | None = None) -> str:
+    """Same words, written in another script (English speech in Hindi letters). Sarvam first, Groq as backup."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    key = api_key or os.environ.get("SARVAM_API_KEY")
+    err = "no SARVAM_API_KEY"
+    if key and target in SUPPORTED:
+        try:
+            r = requests.post("https://api.sarvam.ai/transliterate",
+                              headers={"api-subscription-key": key, "Content-Type": "application/json"},
+                              json={"input": text[:1000], "source_language_code": source if source in SUPPORTED else "auto",
+                                    "target_language_code": target}, timeout=15)
+            if r.status_code == 200 and r.json().get("transliterated_text"):
+                return r.json()["transliterated_text"]
+            err = f"sarvam http {r.status_code}"
+        except requests.RequestException as e:
+            err = f"sarvam {e.__class__.__name__}"
+    try:
+        return groq_translit(text, target)
+    except TranslateError as e:
+        raise TranslateError(f"{err}; backup: {e}")
