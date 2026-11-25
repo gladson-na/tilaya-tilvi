@@ -12,9 +12,11 @@ class MainActivity : FlutterActivity() {
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tilda/native")
         TildaService.onFocus = { f -> ch.invokeMethod("focus", f) }
         TildaService.onTap = { ch.invokeMethod("toggle", null) }
+        TildaService.onLongPress = { ch.invokeMethod("longpress", null) }
         ch.setMethodCallHandler { call, res ->
             when (call.method) {
                 "insert" -> res.success(TildaService.insert(call.arguments as String))
+                "label" -> { TildaService.label(call.arguments as String); res.success(true) }
                 "liveStart" -> res.success(TildaService.liveStart())
                 "liveSet" -> res.success(TildaService.liveSet(call.arguments as String))
                 "state" -> { TildaService.instance?.setState(call.arguments as String); res.success(true) }
@@ -32,6 +34,7 @@ class MainActivity : FlutterActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         TildaService.onFocus = null
         TildaService.onTap = null
+        TildaService.onLongPress = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

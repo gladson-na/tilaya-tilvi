@@ -24,6 +24,8 @@ class TildaService : AccessibilityService() {
         var instance: TildaService? = null
         var onFocus: ((Boolean) -> Unit)? = null
         var onTap: (() -> Unit)? = null
+        var onLongPress: (() -> Unit)? = null
+        fun label(t: String) { instance?.showLabel(t) }
         var auto = true
         fun insert(text: String): Boolean = instance?.doInsert(text) ?: false
         fun liveStart(): Boolean = instance?.doLiveStart() ?: false
@@ -35,6 +37,25 @@ class TildaService : AccessibilityService() {
     private var st = "idle"
     private var savedX = -1
     private var savedY = -1
+    private var labelOverride: String? = null
+    private var longFired = false
+    private val lpR = Runnable { longFired = true; onLongPress?.invoke() }
+
+    private fun showLabel(t: String) {
+        labelOverride = t
+        bubble?.let { paint(it) }
+        handler.postDelayed({ labelOverride = null; bubble?.let { paint(it) } }, 1800)
+    }
+
+    private fun screenW(): Int = try {
+        if (Build.VERSION.SDK_INT >= 30) (getSystemService(Context.WINDOW_SERVICE) as WindowManager).currentWindowMetrics.bounds.width()
+        else resources.displayMetrics.widthPixels
+    } catch (_: Exception) { resources.displayMetrics.widthPixels }
+
+    private fun screenH(): Int = try {
+        if (Build.VERSION.SDK_INT >= 30) (getSystemService(Context.WINDOW_SERVICE) as WindowManager).currentWindowMetrics.bounds.height()
+        else resources.displayMetrics.heightPixels
+    } catch (_: Exception) { resources.displayMetrics.heightPixels }
     private val watchR = object : Runnable {
         override fun run() {
             if (bubble != null) {
@@ -56,7 +77,7 @@ class TildaService : AccessibilityService() {
         g.shape = GradientDrawable.OVAL
         g.setColor(c)
         v.background = g
-        v.text = when (st) { "recording" -> "■"; "working" -> "…"; "done" -> "✓"; else -> "🎙" }
+        v.text = labelOverride ?: when (st) { "recording" -> "■"; "working" -> "…"; "done" -> "✓"; else -> "🎙" }
     }
 
     private fun showBubble() {
@@ -74,23 +95,25 @@ class TildaService : AccessibilityService() {
                 PixelFormat.TRANSLUCENT)
             lp.gravity = Gravity.TOP or Gravity.START
             val dm = resources.displayMetrics
-            lp.x = if (savedX >= 0) savedX else dm.widthPixels - size - (12 * d).toInt()
-            lp.y = if (savedY >= 0) savedY else dm.heightPixels / 2 - size
+            lp.x = (if (savedX >= 0) savedX else dm.widthPixels - size - (12 * d).toInt()).coerceIn(0, Math.max(0, screenW() - size))
+            lp.y = (if (savedY >= 0) savedY else dm.heightPixels / 2 - size).coerceIn(0, Math.max(0, screenH() - size))
             var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
             v.setOnTouchListener { _, ev ->
                 val wm2 = getSystemService(Context.WINDOW_SERVICE) as WindowManager
                 when (ev.action) {
-                    android.view.MotionEvent.ACTION_DOWN -> { downX = ev.rawX; downY = ev.rawY; startX = lp.x; startY = lp.y; moved = false }
+                    android.view.MotionEvent.ACTION_DOWN -> { downX = ev.rawX; downY = ev.rawY; startX = lp.x; startY = lp.y; moved = false; longFired = false; handler.postDelayed(lpR, 600) }
                     android.view.MotionEvent.ACTION_MOVE -> {
                         val dx = ev.rawX - downX; val dy = ev.rawY - downY
                         if (moved || Math.abs(dx) > 12 * d || Math.abs(dy) > 12 * d) {
                             moved = true
-                            lp.x = (startX + dx).toInt(); lp.y = (startY + dy).toInt()
+                            handler.removeCallbacks(lpR)
+                            lp.x = (startX + dx).toInt().coerceIn(0, Math.max(0, screenW() - size))
+                            lp.y = (startY + dy).toInt().coerceIn(0, Math.max(0, screenH() - size))
                             savedX = lp.x; savedY = lp.y
                             try { wm2.updateViewLayout(v, lp) } catch (_: Exception) {}
                         }
                     }
-                    android.view.MotionEvent.ACTION_UP -> if (!moved) onTap?.invoke()
+                    android.view.MotionEvent.ACTION_UP -> { handler.removeCallbacks(lpR); if (!moved && !longFired) onTap?.invoke() }
                 }
                 true
             }
