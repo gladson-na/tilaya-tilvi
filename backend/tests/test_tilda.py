@@ -291,3 +291,54 @@ def test_health_wakes_server():
     c = server.app.test_client()
     r = c.get("/health")
     assert r.status_code == 200 and r.data == b"ok"
+
+
+def test_groq_engine_is_second_in_chain_and_needs_key(monkeypatch):
+    from tilda.engines import default_chain, GroqEngine, EngineError
+    chain = default_chain()
+    assert chain[1].name == "groq-whisper"
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(EngineError):
+        GroqEngine().transcribe("x.wav", "hi-IN")
+
+
+def test_chat_falls_back_to_groq(monkeypatch):
+    from tilda import talk
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._b, self.text = code, body, "x"
+
+        def json(self):
+            return self._b
+
+    def fake_post(url, **kw):
+        if "sarvam" in url:
+            return R(402, {})
+        return R(200, {"choices": [{"message": {"content": "Namaste, I can help."}}]})
+
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    monkeypatch.setattr(talk.requests, "post", fake_post)
+    assert "help" in talk.reply([{"role": "user", "content": "hi"}], "en-IN")
+
+
+def test_translate_falls_back_to_groq(monkeypatch):
+    from tilda import translate as tr
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._b = code, body
+
+        def json(self):
+            return self._b
+
+    def fake_post(url, **kw):
+        if "sarvam" in url:
+            return R(402, {})
+        return R(200, {"choices": [{"message": {"content": "नमस्ते"}}]})
+
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    monkeypatch.setattr(tr.requests, "post", fake_post)
+    assert tr.translate("hello", "en-IN", "hi-IN") == "नमस्ते"
