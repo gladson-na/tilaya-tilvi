@@ -284,3 +284,10 @@ def test_talk_stream_speaks_sentence_by_sentence(monkeypatch):
     got = list(talk.stream_turn([{"role": "user", "content": "hi"}], "en-IN"))
     assert [g["text"] for g in got] == ["Hello there my friend.", "How are you today? Fine."] or len(got) >= 2
     assert all(g["audio"] == "QQ==" for g in got)
+
+
+def test_health_wakes_server():
+    from tilda import server
+    c = server.app.test_client()
+    r = c.get("/health")
+    assert r.status_code == 200 and r.data == b"ok"

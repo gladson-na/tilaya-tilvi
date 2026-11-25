@@ -73,6 +73,11 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.get("/health")
+def health():
+    return "ok"
+
+
 @app.post("/act")
 def act():
     return jsonify(interpret((request.get_json(silent=True) or {}).get("text", "")))
