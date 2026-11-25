@@ -26,6 +26,8 @@ class TildaService : AccessibilityService() {
         var onTap: (() -> Unit)? = null
         var auto = true
         fun insert(text: String): Boolean = instance?.doInsert(text) ?: false
+        fun liveStart(): Boolean = instance?.doLiveStart() ?: false
+        fun liveSet(text: String): Boolean = instance?.doLiveSet(text) ?: false
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -171,5 +173,35 @@ class TildaService : AccessibilityService() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("tilda", text))
         return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+    }
+
+    private var liveBase = ""
+    private var liveTail = ""
+
+    /** Remembers where the cursor is, so live words can replace the same spot again and again. */
+    private fun doLiveStart(): Boolean {
+        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        if (!node.isEditable) return false
+        val hint = Build.VERSION.SDK_INT >= 26 && node.isShowingHintText
+        val cur = if (node.text != null && !hint) node.text.toString() else ""
+        val s = node.textSelectionStart.coerceIn(0, cur.length)
+        val e = node.textSelectionEnd.coerceIn(s, cur.length)
+        liveBase = cur.substring(0, s)
+        liveTail = cur.substring(e)
+        return true
+    }
+
+    private fun doLiveSet(text: String): Boolean {
+        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        if (!node.isEditable) return false
+        val args = Bundle()
+        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, liveBase + text + liveTail)
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return false
+        val pos = liveBase.length + text.length
+        val sel = Bundle()
+        sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, pos)
+        sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, pos)
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+        return true
     }
 }

@@ -59,6 +59,34 @@ class SarvamEngine(Engine):
         return Result(j.get("transcript", ""), self.name, language=j.get("language_code"))
 
 
+_WHISPER_CODES = {"hi", "en", "bn", "ta", "te", "kn", "ml", "mr", "gu", "pa", "ur", "ne", "as", "si"}
+
+
+class GroqEngine(Engine):
+    """Backup when Sarvam is down: open Whisper large-v3-turbo on Groq's free tier. Needs GROQ_API_KEY."""
+    name = "groq-whisper"
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+
+    def __init__(self, api_key: str | None = None, model: str = "whisper-large-v3-turbo"):
+        self.api_key = api_key or os.environ.get("GROQ_API_KEY")
+        self.model = model
+
+    def transcribe(self, wav_path, lang):
+        if not self.api_key:
+            raise EngineError("no GROQ_API_KEY")
+        import requests
+        data = {"model": self.model, "response_format": "json", "temperature": "0"}
+        code = (lang or "").split("-")[0].lower()
+        if code in _WHISPER_CODES:  # Odia and "unknown": let Whisper detect it
+            data["language"] = code
+        with open(wav_path, "rb") as f:
+            r = requests.post(self.url, headers={"Authorization": f"Bearer {self.api_key}"},
+                              files={"file": ("audio.wav", f, "audio/wav")}, data=data, timeout=25)
+        if r.status_code != 200:
+            raise EngineError(f"groq http {r.status_code}: {r.text[:200]}")
+        return Result((r.json().get("text") or "").strip(), self.name, language=lang if code in _WHISPER_CODES else None)
+
+
 class IndicConformerEngine(Engine):
     """Layer 2. AI4Bharat open model (MIT). Runs locally; first use downloads the model."""
     name = "indic-conformer"
@@ -134,6 +162,7 @@ class VoskEngine(Engine):
 def default_chain() -> list[Engine]:
     return [
         SarvamEngine(),
+        GroqEngine(),
         IndicConformerEngine(),
         WhisperEngine("large-v3", "whisper-large"),
         WhisperEngine("small", "whisper-small"),
