@@ -765,8 +765,12 @@ class _HomePageState extends State<HomePage> {
               ..fields['mine'] = _style.myLangs.join(',')
               ..fields['piece'] = name
               ..fields.addAll(_style.hints().isEmpty ? {} : {'hints': _style.hints()})
-              ..files.add(await http.MultipartFile.fromPath('audio', f.path));
+              ..files.add(Api.slow
+                  ? http.MultipartFile.fromBytes('audio', slimWav(await f.readAsBytes()), filename: 'a.wav')
+                  : await http.MultipartFile.fromPath('audio', f.path));
+            final upT0 = DateTime.now();
             final res = await http.Response.fromStream(await req.send().timeout(Duration(seconds: busy ? 30 : 70)));
+            Api.noteSpeed(DateTime.now().difference(upT0));
             Map<String, dynamic> j;
             try {
               j = jsonDecode(res.body) as Map<String, dynamic>;
@@ -942,6 +946,13 @@ class _HomePageState extends State<HomePage> {
                   },
                   child: const Text('Change'),
                 ),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Slow internet mode'),
+                subtitle: const Text('Sends much less data and speaks with the phone\'s voice. Tilda also switches this on by herself when the network is slow.'),
+                value: Api.saver,
+                onChanged: (v) => setSheet(() => Api.saver = v),
               ),
               ListTile(
                 contentPadding: EdgeInsets.zero,

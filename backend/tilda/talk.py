@@ -115,12 +115,13 @@ def speak(text: str, lang: str, speaker: str = None, api_key=None) -> str:
         raise TalkError("nothing to say")
     speaker = speaker or os.environ.get("TILDA_VOICE", "priya")
     code = lang if lang in SPEECH_LANGS else "en-IN"
-    r = requests.post(
-        TTS_URL,
-        headers={"api-subscription-key": key, "Content-Type": "application/json"},
-        json={"text": text, "target_language_code": code, "speaker": speaker, "model": "bulbul:v3"},
-        timeout=30,
-    )
+    body = {"text": text, "target_language_code": code, "speaker": speaker, "model": "bulbul:v3"}
+    # small audio first (mp3 at 16 kHz is about a tenth of the default WAV): this is what makes it work on slow networks
+    r = requests.post(TTS_URL, headers={"api-subscription-key": key, "Content-Type": "application/json"},
+                      json={**body, "speech_sample_rate": 16000, "output_audio_codec": "mp3"}, timeout=30)
+    if r.status_code in (400, 422):  # the compact options were refused: ask the plain way
+        r = requests.post(TTS_URL, headers={"api-subscription-key": key, "Content-Type": "application/json"},
+                          json=body, timeout=30)
     if r.status_code != 200:
         raise TalkError(f"sarvam tts http {r.status_code}: {r.text[:200]}")
     audios = r.json().get("audios") or []
@@ -132,7 +133,7 @@ def speak(text: str, lang: str, speaker: str = None, api_key=None) -> str:
 _END = re.compile(r"(?<=[.!?\u0964\u0965])\s+")
 
 
-def stream_turn(messages, lang: str, api_key=None, extra: str = ""):
+def stream_turn(messages, lang: str, api_key=None, extra: str = "", voice: bool = True):
     """Yields {"text", "audio"} one sentence at a time, so Tilda starts talking after the first sentence."""
     key = _key(api_key)
     turns = [{"role": m["role"], "content": str(m["content"])[:1500]}
@@ -159,6 +160,8 @@ def stream_turn(messages, lang: str, api_key=None, extra: str = ""):
         text = clean(text)
         if not text:
             return None
+        if not voice:  # data saver: words only, the phone speaks them
+            return {"text": text}
         try:
             return {"text": text, "audio": speak(text, lang, api_key=key)}
         except TalkError as e:

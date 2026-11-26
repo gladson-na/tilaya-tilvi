@@ -34,6 +34,8 @@ class _NotesScreenState extends State<NotesScreen> {
   DateTime _lastLoud = DateTime.now();
   final _waiting = <Uint8List>[]; // recordings not yet turned into text (kept if the network drops)
   bool _working = false;
+  bool _rotating = false;
+  double _lvl = 0;
   bool _summarising = false;
 
   String get _nl => widget.style.notesLang;
@@ -72,7 +74,7 @@ class _NotesScreenState extends State<NotesScreen> {
     }
     await _service(true); // after the microphone is allowed: Android refuses a mic service before that
     _lastLoud = DateTime.now();
-    _cut = Timer.periodic(const Duration(seconds: 12), (_) => _slice());
+    _cut = Timer.periodic(const Duration(seconds: 2), (_) => _slice());
     _set(() {
       _on = true;
       _quiet = false;
@@ -82,7 +84,8 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 
   void _onLevel(double l) {
-    if (l > 0.008) _lastLoud = DateTime.now();
+    _lvl = l;
+    if (l > 0.006) _lastLoud = DateTime.now();
     final q = DateTime.now().difference(_lastLoud).inSeconds > 15;
     if (q != _quiet && mounted) {
       setState(() {
@@ -92,10 +95,21 @@ class _NotesScreenState extends State<NotesScreen> {
     }
   }
 
-  void _slice() {
-    if (!_mic.on || _mic.bytes < 32000 * 3) return;
-    _waiting.add(_mic.take());
-    unawaited(_work());
+  /// Every 10 to 20 seconds (waiting for a pause in the talking) the recording so far is sent off and a new one starts.
+  Future<void> _slice() async {
+    if (!_mic.on || _rotating) return;
+    final t = _mic.seconds;
+    if (t < 10 || (t < 20 && _lvl > 0.03)) return;
+    _rotating = true;
+    try {
+      final b = await _mic.rotate();
+      if (b.length > 600) {
+        _waiting.add(b);
+        unawaited(_work());
+      }
+    } finally {
+      _rotating = false;
+    }
   }
 
   Future<void> _work() async {
@@ -105,7 +119,7 @@ class _NotesScreenState extends State<NotesScreen> {
       while (_waiting.isNotEmpty && mounted) {
         final wav = _waiting.first;
         try {
-          final j = await Api.transcribe(wav, 'auto', widget.style.myLangs.toList(), fast: true);
+          final j = await Api.transcribe(wav, 'auto', widget.style.myLangs.toList(), fast: true, ext: _mic.ext);
           _waiting.removeAt(0);
           final text = ((j['text'] ?? '') as String).trim();
           final lang = (j['language'] ?? 'auto') as String;
@@ -170,7 +184,7 @@ class _NotesScreenState extends State<NotesScreen> {
     _cut?.cancel();
     final rest = await _mic.stop();
     await _service(false);
-    if (rest.length > 32000 * 2) _waiting.add(rest);
+    if (rest.length > 600) _waiting.add(rest);
     _set(() {
       _on = false;
       _quiet = false;

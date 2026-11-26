@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 /// Every language the server can work with.
@@ -19,6 +21,20 @@ const kLangs = {
 class Api {
   static String base = 'https://tilda-backend-opfj.onrender.com';
 
+  /// Slow internet: switched on by hand in Settings, or by itself when uploads take too long (2G).
+  static bool saver = false;
+  static bool slowSeen = false;
+  static bool get slow => saver || slowSeen;
+
+  /// Called with how long a small upload took, to notice a slow network and to notice it getting better.
+  static void noteSpeed(Duration d) {
+    if (d.inSeconds > 12) {
+      slowSeen = true;
+    } else if (d.inSeconds < 4) {
+      slowSeen = false;
+    }
+  }
+
   static Future<void> wake() async {
     try {
       await http.get(Uri.parse('$base/health')).timeout(const Duration(seconds: 20));
@@ -26,14 +42,16 @@ class Api {
   }
 
   /// Speech to text. [lang] is a code like hi-IN, or 'auto' to let the server find the language.
-  static Future<Map<String, dynamic>> transcribe(Uint8List wav, String lang, List<String> mine, {bool fast = false}) async {
+  static Future<Map<String, dynamic>> transcribe(Uint8List wav, String lang, List<String> mine, {bool fast = false, String ext = 'wav'}) async {
     final req = http.MultipartRequest('POST', Uri.parse('$base/transcribe'))
       ..fields['lang'] = lang
       ..fields['mine'] = mine.join(',')
       ..fields['piece'] = 'n${DateTime.now().microsecondsSinceEpoch}'
-      ..files.add(http.MultipartFile.fromBytes('audio', wav, filename: 'a.wav'));
+      ..files.add(http.MultipartFile.fromBytes('audio', wav, filename: 'a.$ext'));
     if (fast) req.fields['fast'] = '1';
-    final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 45)));
+    final t0 = DateTime.now();
+    final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 60)));
+    noteSpeed(DateTime.now().difference(t0));
     final j = jsonDecode(res.body) as Map<String, dynamic>;
     if (j['error'] != null) throw Exception('${j['error']}');
     return j;
@@ -73,6 +91,7 @@ class Api {
 
   /// Sarvam voice as audio bytes, or null if the server voice is not available.
   static Future<Uint8List?> speak(String text, String lang) async {
+    if (slow) return null; // slow internet: the phone's own voice, nothing to download
     try {
       final res = await http
           .post(Uri.parse('$base/speak'),
@@ -103,7 +122,7 @@ class Api {
   static Stream<Map<String, dynamic>> talk(List<Map<String, String>> messages, String lang, {double? lat, double? lon}) async* {
     final req = http.Request('POST', Uri.parse('$base/talk'))
       ..headers['Content-Type'] = 'application/json'
-      ..body = jsonEncode({'messages': messages, 'lang': lang, if (lat != null) 'lat': lat, if (lon != null) 'lon': lon});
+      ..body = jsonEncode({'messages': messages, 'lang': lang, 'voice': !slow, if (lat != null) 'lat': lat, if (lon != null) 'lon': lon});
     final resp = await http.Client().send(req).timeout(const Duration(seconds: 60));
     await for (final line in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
       if (line.trim().isEmpty) continue;
@@ -136,52 +155,125 @@ Uint8List pcmToWav(Uint8List pcm) {
   return Uint8List.fromList([...h.buffer.asUint8List(), ...pcm]);
 }
 
-/// A microphone that reports how loud it is and hands back finished recordings as WAV.
-class Mic {
-  final _rec = AudioRecorder();
-  StreamSubscription<Uint8List>? _sub;
-  final _buf = BytesBuilder(copy: false);
-  bool get on => _sub != null;
-  int get bytes => _buf.length;
-
-  /// Loudness of a 16-bit mono chunk, 0 (silent) to 1.
-  static double level(Uint8List c) {
-    final n = c.length ~/ 2;
-    if (n == 0) return 0;
-    final bd = ByteData.sublistView(c);
-    var s = 0.0;
-    for (var i = 0; i < n; i++) {
-      final v = bd.getInt16(i * 2, Endian.little);
-      s += v * v;
+/// 8-bit, 8 kHz copy of a 16-bit, 16 kHz WAV: a quarter of the size, for very slow networks.
+Uint8List slimWav(Uint8List wav) {
+  if (wav.length <= 44) return wav;
+  int mulaw(int s) {
+    const bias = 0x84, clip = 32635;
+    var sign = 0;
+    if (s < 0) {
+      s = -s;
+      sign = 0x80;
     }
-    return math.sqrt(s / n) / 32768;
+    if (s > clip) s = clip;
+    s += bias;
+    var exp = 7;
+    for (var mask = 0x4000; (s & mask) == 0 && exp > 0; mask >>= 1) {
+      exp--;
+    }
+    final mant = (s >> (exp + 3)) & 0x0F;
+    return (~(sign | (exp << 4) | mant)) & 0xFF;
   }
 
+  final bd = ByteData.sublistView(wav, 44);
+  final n = (wav.length - 44) ~/ 2;
+  final out = Uint8List(n ~/ 2);
+  for (var i = 0; i + 1 < n; i += 2) {
+    final a = bd.getInt16(i * 2, Endian.little), b = bd.getInt16((i + 1) * 2, Endian.little);
+    out[i ~/ 2] = mulaw((a + b) ~/ 2);
+  }
+  final h = ByteData(46);
+  void tag(int o, String t) {
+    for (var k = 0; k < 4; k++) {
+      h.setUint8(o + k, t.codeUnitAt(k));
+    }
+  }
+
+  tag(0, 'RIFF');
+  h.setUint32(4, 38 + out.length, Endian.little);
+  tag(8, 'WAVE');
+  tag(12, 'fmt ');
+  h.setUint32(16, 18, Endian.little);
+  h.setUint16(20, 7, Endian.little); // G.711 mu-law
+  h.setUint16(22, 1, Endian.little);
+  h.setUint32(24, 8000, Endian.little);
+  h.setUint32(28, 8000, Endian.little);
+  h.setUint16(32, 1, Endian.little);
+  h.setUint16(34, 8, Endian.little);
+  h.setUint16(36, 0, Endian.little);
+  tag(38, 'data');
+  h.setUint32(42, out.length, Endian.little);
+  return Uint8List.fromList([...h.buffer.asUint8List(), ...out]);
+}
+
+/// A microphone that records small compressed audio (Opus, about 2 KB per second, ten times smaller
+/// than plain WAV) and reports how loud it is. Small recordings are what make Tilda work on 2G.
+class Mic {
+  final _rec = AudioRecorder();
+  StreamSubscription<Amplitude>? _amp;
+  String? _path;
+  DateTime _t0 = DateTime.now();
+  bool _on = false;
+  void Function(double)? _lv;
+
+  /// File type of what comes out: ogg (Opus) or m4a on older phones.
+  String ext = 'ogg';
+  bool get on => _on;
+  double get seconds => _on ? DateTime.now().difference(_t0).inMilliseconds / 1000 : 0;
+
+  /// dB below full scale (as the recorder reports it) to a loudness between 0 and 1.
+  static double level(double db) => db.isFinite ? math.pow(10, db / 20).toDouble() : 0.0;
+
   Future<bool> start(void Function(double level) onLevel) async {
-    if (on) return true;
+    if (_on) return true;
     if (!await _rec.hasPermission()) return false;
-    _buf.clear();
-    final s = await _rec.startStream(const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1));
-    _sub = s.listen((c) {
-      _buf.add(c);
-      onLevel(level(c));
-    });
+    _lv = onLevel;
+    await _begin();
     return true;
   }
 
-  /// What has been recorded so far as a WAV; recording carries on.
-  Uint8List take() {
-    final b = _buf.takeBytes();
-    return pcmToWav(b);
+  Future<void> _begin() async {
+    final dir = await getTemporaryDirectory();
+    final opus = await _rec.isEncoderSupported(AudioEncoder.opus);
+    ext = opus ? 'ogg' : 'm4a';
+    final path = '${dir.path}/tilda_${DateTime.now().microsecondsSinceEpoch}.$ext';
+    await _rec.start(
+        RecordConfig(encoder: opus ? AudioEncoder.opus : AudioEncoder.aacLc, sampleRate: 16000, numChannels: 1, bitRate: 20000),
+        path: path);
+    _path = path;
+    _t0 = DateTime.now();
+    _on = true;
+    await _amp?.cancel();
+    _amp = _rec.onAmplitudeChanged(const Duration(milliseconds: 120)).listen((a) => _lv?.call(level(a.current)));
   }
 
-  Future<Uint8List> stop() async {
-    await _sub?.cancel();
-    _sub = null;
+  Future<Uint8List> _end() async {
+    await _amp?.cancel();
+    _amp = null;
+    String? p;
     try {
-      await _rec.stop();
+      p = await _rec.stop();
     } catch (_) {}
-    return take();
+    p ??= _path;
+    _on = false;
+    if (p == null) return Uint8List(0);
+    final f = File(p);
+    try {
+      final b = await f.readAsBytes();
+      await f.delete();
+      return b;
+    } catch (_) {
+      return Uint8List(0);
+    }
+  }
+
+  Future<Uint8List> stop() async => _on ? _end() : Uint8List(0);
+
+  /// Hands back everything recorded so far and carries on recording (Notes does this every few seconds).
+  Future<Uint8List> rotate() async {
+    final b = await _end();
+    await _begin();
+    return b;
   }
 
   Future<void> dispose() async {

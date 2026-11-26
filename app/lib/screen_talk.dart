@@ -140,7 +140,7 @@ class _TalkScreenState extends State<TalkScreen> {
   void _onLevel(double l) {
     if (!mounted || _orb != OrbState.listening || _finishing) return;
     final now = DateTime.now();
-    if (l > 0.02) {
+    if (l > 0.03) {
       _voiced = true;
       _lastVoice = now;
     }
@@ -163,7 +163,9 @@ class _TalkScreenState extends State<TalkScreen> {
     final wav = await _mic.stop();
     if (!_active) return;
     try {
-      final j = await Api.transcribe(wav, _lang.isEmpty ? 'auto' : _lang, widget.style.myLangs.toList());
+      final Map<String, dynamic> j = wav.length < 600
+          ? {'text': ''}
+          : await Api.transcribe(wav, _lang.isEmpty ? 'auto' : _lang, widget.style.myLangs.toList(), ext: _mic.ext);
       final text = ((j['text'] ?? '') as String).trim();
       final lang = (j['language'] ?? '') as String;
       if (_lang.isEmpty && lang.isNotEmpty && lang != 'unknown') _lang = lang;

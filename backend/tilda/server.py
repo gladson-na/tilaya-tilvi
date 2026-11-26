@@ -134,7 +134,7 @@ def talk_route():
             ctx = tools.context_for(msgs, lat, lon)
             if ctx["intent"]:
                 yield json.dumps({"intent": ctx["intent"]}) + "\n"
-            for item in talk_stream(msgs, lang, extra=ctx["extra"]):
+            for item in talk_stream(msgs, lang, extra=ctx["extra"], voice=j.get("voice") is not False):
                 yield json.dumps(item) + "\n"
         except TalkError as e:
             yield json.dumps({"error": str(e)}) + "\n"
