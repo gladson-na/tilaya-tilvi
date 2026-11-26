@@ -174,11 +174,24 @@ class TildaService : AccessibilityService() {
         onFocus?.invoke(editable)
     }
 
+    /** What the person really typed. Some apps (WhatsApp) show the placeholder "Message" as if it were text. */
+    private fun realText(node: AccessibilityNodeInfo): String {
+        val t = node.text?.toString() ?: return ""
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (node.isShowingHintText) return ""
+            val h = node.hintText?.toString()
+            if (!h.isNullOrEmpty() && h == t) return ""
+        }
+        if (t.trim().lowercase() in placeholders) return ""
+        return t
+    }
+
+    private val placeholders = setOf("message", "type a message", "write a message", "type a message...", "message...", "search", "add a comment...")
+
     private fun doInsert(text: String): Boolean {
         val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
         if (!node.isEditable) return false
-        val hint = Build.VERSION.SDK_INT >= 26 && node.isShowingHintText
-        val cur = if (node.text != null && !hint) node.text.toString() else ""
+        val cur = realText(node)
         val s = node.textSelectionStart.coerceIn(0, cur.length)
         val e = node.textSelectionEnd.coerceIn(s, cur.length)
         val out = cur.substring(0, s) + text + cur.substring(e)
@@ -205,8 +218,7 @@ class TildaService : AccessibilityService() {
     private fun doLiveStart(): Boolean {
         val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
         if (!node.isEditable) return false
-        val hint = Build.VERSION.SDK_INT >= 26 && node.isShowingHintText
-        val cur = if (node.text != null && !hint) node.text.toString() else ""
+        val cur = realText(node)
         val s = node.textSelectionStart.coerceIn(0, cur.length)
         val e = node.textSelectionEnd.coerceIn(s, cur.length)
         liveBase = cur.substring(0, s)
