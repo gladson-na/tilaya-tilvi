@@ -53,6 +53,11 @@ jobs:
       - name: Use the same signing key every build so updates install over the old app
         run: mkdir -p ~/.android && cp signing/debug.keystore ~/.android/debug.keystore
         working-directory: app
+      - name: Add the offline text-reading models (Hindi script plus the other three the plugin expects)
+        run: |
+          F=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
+          printf '\ndependencies {\n    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")\n    implementation("com.google.mlkit:text-recognition-devanagari:16.0.1")\n    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")\n    implementation("com.google.mlkit:text-recognition-korean:16.0.1")\n}\n' >> "$F"
+        working-directory: app
       - name: Skip the release lint check (it crashes inside the camera plugin)
         run: |
           mkdir -p ~/.gradle/init.d

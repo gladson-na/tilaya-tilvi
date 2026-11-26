@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'api.dart';
@@ -72,7 +73,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _error = '';
         _orb = OrbState.reading;
       });
-      final j = await Api.readPhoto(base64Encode(bytes), _lang);
+      Map<String, dynamic> j;
+      try {
+        j = await Api.readPhoto(base64Encode(bytes), _lang);
+      } catch (_) {
+        // No internet or the server is busy: read the words on the phone itself (Hindi, Marathi and English).
+        await _readOffline(x.path);
+        return;
+      }
       final t = (j['text'] ?? '') as String;
       _set(() {
         _text = t;
@@ -86,6 +94,29 @@ class _CaptureScreenState extends State<CaptureScreen> {
     } finally {
       _busy = false;
       _set(() => _orb = OrbState.idle);
+    }
+  }
+
+  Future<void> _readOffline(String path) async {
+    final rec = TextRecognizer(script: TextRecognitionScript.devanagiri);
+    try {
+      final r = await rec.processImage(InputImage.fromFilePath(path));
+      final t = r.text.trim();
+      final deva = RegExp(r'[\u0900-\u097F]').hasMatch(t);
+      _set(() {
+        _text = t;
+        _original = '';
+        _error = t.isEmpty
+            ? 'No internet, and I could not read any Hindi or English words in that photo. Try closer, in good light.'
+            : 'No internet: reading the words as written, without translation.';
+        _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
+      });
+      if (t.isNotEmpty) {
+        await _tts.setLanguage(deva ? 'hi-IN' : 'en-IN');
+        await _tts.speak(t.length > 700 ? t.substring(0, 700) : t);
+      }
+    } finally {
+      await rec.close();
     }
   }
 
