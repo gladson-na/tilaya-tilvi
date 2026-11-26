@@ -255,7 +255,7 @@ def summarize(text: str, lang_name: str) -> str:
 
 def _telegram(rec: dict, why: dict | None = None) -> bool:
     """Free and instant: a message to your own Telegram when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set."""
-    tok, chat = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip().strip("\"'"), (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    tok, chat = "".join((os.environ.get("TELEGRAM_BOT_TOKEN") or "").split()).strip("\"'"), "".join((os.environ.get("TELEGRAM_CHAT_ID") or "").split())
     if not tok or not chat:
         if why is not None:
             why["telegram"] = "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing"
