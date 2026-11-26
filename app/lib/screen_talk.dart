@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:convert';
 
 import 'package:audioplayers/audioplayers.dart';
@@ -37,6 +38,7 @@ class _TalkScreenState extends State<TalkScreen> {
   bool _noisy = false;
   bool _finishing = false;
   bool _voiced = false;
+  double _floor = -1; // the room's steady noise (a fan, traffic), learned while listening
   DateTime _lastVoice = DateTime.now();
   DateTime _t0 = DateTime.now();
   int _empty = 0;
@@ -128,6 +130,7 @@ class _TalkScreenState extends State<TalkScreen> {
       return;
     }
     _voiced = false;
+    _floor = -1;
     _finishing = false;
     _t0 = DateTime.now();
     _lastVoice = _t0;
@@ -140,7 +143,11 @@ class _TalkScreenState extends State<TalkScreen> {
   void _onLevel(double l) {
     if (!mounted || _orb != OrbState.listening || _finishing) return;
     final now = DateTime.now();
-    if (l > 0.03) {
+    // learn the steady background: it drops to the quietest level at once and creeps up slowly
+    _floor = _floor < 0 ? l : (l < _floor ? l : _floor + (l - _floor) * 0.02);
+    final warm = now.difference(_t0).inMilliseconds > 400; // first moments only measure the room
+    // speech must stand clearly above the steady noise, so a fan or traffic never counts as a voice
+    if (warm && l > math.max(0.03, _floor * 2.6 + 0.01)) {
       _voiced = true;
       _lastVoice = now;
     }
