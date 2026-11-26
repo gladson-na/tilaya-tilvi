@@ -77,7 +77,7 @@ class NotesService : Service() {
     private fun startCapture(code: Int, data: Intent) {
         try {
             val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            val mp = mgr.getMediaProjection(code, data)
+            val mp = mgr.getMediaProjection(code, data) ?: throw IllegalStateException("no projection")
             mp.registerCallback(object : MediaProjection.Callback() { override fun onStop() { capturing = false } }, null)
             proj = mp
             val cfg = AudioPlaybackCaptureConfiguration.Builder(mp)
