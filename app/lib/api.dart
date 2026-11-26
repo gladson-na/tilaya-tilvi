@@ -267,7 +267,10 @@ class Mic {
     }
   }
 
-  Future<Uint8List> stop() async => _on ? _end() : Uint8List(0);
+  Future<Uint8List> stop() async {
+    if (!_on) return Uint8List(0);
+    return _end();
+  }
 
   /// Hands back everything recorded so far and carries on recording (Notes does this every few seconds).
   Future<Uint8List> rotate() async {
