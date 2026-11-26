@@ -78,6 +78,38 @@ class TildaService : AccessibilityService() {
         g.setColor(c)
         v.background = g
         v.text = labelOverride ?: when (st) { "recording" -> "■"; "working" -> "…"; "done" -> "✓"; else -> "🎙" }
+        animateBubble(v)
+    }
+
+    private var animFor = ""
+
+    /** Recording: breathing pulse. Working: slow spin of the dots. Done: one pop. Idle: still. */
+    private fun animateBubble(v: TextView) {
+        if (animFor == st) return
+        animFor = st
+        v.animate().cancel()
+        v.scaleX = 1f; v.scaleY = 1f; v.rotation = 0f; v.alpha = 1f
+        when (st) {
+            "recording" -> {
+                val r = object : Runnable { override fun run() {
+                    if (animFor != "recording" || bubble == null) return
+                    v.animate().scaleX(1.18f).scaleY(1.18f).alpha(0.8f).setDuration(550).withEndAction {
+                        v.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(550).withEndAction(this).start()
+                    }.start()
+                } }
+                r.run()
+            }
+            "working" -> {
+                val r = object : Runnable { override fun run() {
+                    if (animFor != "working" || bubble == null) return
+                    v.animate().rotationBy(360f).setDuration(1100).setInterpolator(android.view.animation.LinearInterpolator()).withEndAction(this).start()
+                } }
+                r.run()
+            }
+            "done" -> v.animate().scaleX(1.3f).scaleY(1.3f).setDuration(160).withEndAction {
+                v.animate().scaleX(1f).scaleY(1f).setDuration(200).start()
+            }.start()
+        }
     }
 
     private fun showBubble() {
@@ -130,6 +162,7 @@ class TildaService : AccessibilityService() {
         handler.removeCallbacks(watchR)
         bubble?.let { try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } catch (_: Exception) {} }
         bubble = null
+        animFor = ""
     }
 
     fun setState(s: String) {

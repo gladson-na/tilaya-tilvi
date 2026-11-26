@@ -32,6 +32,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
   String _status = '';
   int _downAt = 0;
   bool _ttsDown = false;
+  bool _buds = false; // earbud mode: my side plays in the right ear, the other person's in the left
 
   @override
   void initState() {
@@ -111,7 +112,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
         }
         _status = '';
       });
-      await _speak(out, dst);
+      await _speak(out, dst, me);
     } catch (_) {
       _set(() => _status = 'Could not reach the server. Check the internet and try again.');
     } finally {
@@ -119,10 +120,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
-  Future<void> _speak(String text, String lang) async {
+  Future<void> _speak(String text, String lang, bool me) async {
     try {
       if (!_ttsDown) {
-        final b = await Api.speak(text, lang);
+        final b = await Api.speak(text, lang, pan: _buds ? (me ? 'l' : 'r') : null);
         if (b != null) {
           final done = _player.onPlayerComplete.first;
           await _player.play(BytesSource(b));
@@ -224,6 +225,34 @@ class _TranslateScreenState extends State<TranslateScreen> {
               ),
               _panel(true),
             ]),
+            Positioned(
+              right: 8,
+              top: 0,
+              bottom: 0,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Material(
+                  color: _buds ? kTeal : kCard,
+                  shape: const StadiumBorder(),
+                  child: InkWell(
+                    customBorder: const StadiumBorder(),
+                    onTap: () => _set(() {
+                      _buds = !_buds;
+                      _status = _buds ? 'Earbuds on: they hear in the left ear, you hear in the right.' : '';
+                    }),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.headphones, size: 18, color: _buds ? Colors.black : Colors.white70),
+                        const SizedBox(width: 6),
+                        Text(_buds ? 'Earbuds on' : 'Use earbuds',
+                            style: TextStyle(color: _buds ? Colors.black : Colors.white70, fontWeight: FontWeight.w600)),
+                      ]),
+                    ),
+                  ),
+                ),
+              ),
+            ),
             Positioned(
               left: 4,
               top: 0,

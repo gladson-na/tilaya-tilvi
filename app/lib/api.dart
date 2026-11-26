@@ -82,7 +82,7 @@ class Api {
   static Future<String> summary(String text, String lang) async {
     final res = await http
         .post(Uri.parse('$base/summary'),
-            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang}))
+            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang, if (pan != null) 'pan': pan}))
         .timeout(const Duration(seconds: 60));
     final j = jsonDecode(res.body) as Map<String, dynamic>;
     if (j['error'] != null) throw Exception('${j['error']}');
@@ -90,7 +90,7 @@ class Api {
   }
 
   /// Sarvam voice as audio bytes, or null if the server voice is not available.
-  static Future<Uint8List?> speak(String text, String lang) async {
+  static Future<Uint8List?> speak(String text, String lang, {String? pan}) async {
     if (slow) return null; // slow internet: the phone's own voice, nothing to download
     try {
       final res = await http
@@ -238,7 +238,7 @@ class Mic {
     ext = opus ? 'ogg' : 'm4a';
     final path = '${dir.path}/tilda_${DateTime.now().microsecondsSinceEpoch}.$ext';
     await _rec.start(
-        RecordConfig(encoder: opus ? AudioEncoder.opus : AudioEncoder.aacLc, sampleRate: 16000, numChannels: 1, bitRate: 20000),
+        RecordConfig(encoder: opus ? AudioEncoder.opus : AudioEncoder.aacLc, sampleRate: 16000, numChannels: 1, bitRate: 20000, echoCancel: true, noiseSuppress: true, autoGain: true),
         path: path);
     _path = path;
     _t0 = DateTime.now();

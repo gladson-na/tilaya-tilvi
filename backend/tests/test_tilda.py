@@ -513,3 +513,16 @@ def test_tts_asks_for_small_audio_then_falls_back(monkeypatch):
     monkeypatch.setattr(talk.requests, "post", fake_post)
     assert talk.speak("hello", "en-IN") == "QUJD"
     assert calls[0]["output_audio_codec"] == "mp3" and "output_audio_codec" not in calls[1]
+
+
+def test_speak_route_pans_for_earbuds(monkeypatch):
+    import tilda.server as srv
+    monkeypatch.delenv("TILDA_FAKE", raising=False)
+    monkeypatch.setattr(srv, "talk_speak", lambda t, l: "QUJD")
+    seen = {}
+    monkeypatch.setattr(srv, "pan_audio", lambda a, side: seen.setdefault("side", side) and "UEFO")
+    c = srv.app.test_client()
+    r = c.post("/speak", json={"text": "hi", "lang": "hi-IN", "pan": "l"})
+    assert r.get_json()["audio"] == "UEFO" and seen["side"] == "l"
+    r = c.post("/speak", json={"text": "hi", "lang": "hi-IN"})
+    assert r.get_json()["audio"] == "QUJD"

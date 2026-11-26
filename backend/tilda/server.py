@@ -187,7 +187,10 @@ def do_speak():
     if os.environ.get("TILDA_FAKE"):
         return jsonify(error="no voice in demo mode"), 503
     try:
-        return jsonify(audio=talk_speak(j.get("text", ""), j.get("lang", "en-IN")))
+        audio = talk_speak(j.get("text", ""), j.get("lang", "en-IN"))
+        if j.get("pan") in ("l", "r"):  # earbud mode: the voice plays in one ear only
+            audio = pan_audio(audio, j["pan"])
+        return jsonify(audio=audio)
     except TalkError as e:
         app.logger.error("speak failed: %s", e)
         return jsonify(error=str(e)), 502
@@ -211,9 +214,34 @@ def to_wav(raw: bytes) -> str:
     src.write(raw)
     src.close()
     out = src.name + ".wav"
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src.name, "-ar", "16000", "-ac", "1", out], check=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src.name,
+                    "-af", "highpass=f=90,afftdn=nr=12:nf=-30,dynaudnorm=f=150:g=7",  # cut traffic rumble and hiss, even out loudness
+                    "-ar", "16000", "-ac", "1", out], check=True)
     os.unlink(src.name)
     return out
+
+
+def pan_audio(b64: str, side: str) -> str:
+    """Stereo mp3 with the voice in the left or right ear only. Falls back to the plain audio if ffmpeg fails."""
+    import base64
+    src = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+    src.write(base64.b64decode(b64))
+    src.close()
+    out = src.name + ".mp3"
+    pan = "pan=stereo|c0=c0|c1=0*c0" if side == "l" else "pan=stereo|c0=0*c0|c1=c0"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src.name, "-af", pan, "-b:a", "32k", out],
+                       check=True, timeout=20)
+        with open(out, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return b64
+    finally:
+        for f in (src.name, out):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
 
 
 @app.post("/transcribe")
