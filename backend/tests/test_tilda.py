@@ -429,13 +429,15 @@ def test_talk_route_sends_intent_and_extra(monkeypatch):
     seen = {}
     monkeypatch.setattr(server.tools, "context_for", lambda m, lat, lon: {"intent": "weather", "extra": f"LIVE DATA {lat} {lon}"})
 
-    def fake_stream(msgs, lang, api_key=None, extra=""):
+    def fake_stream(msgs, lang, api_key=None, extra="", voice=True):
         seen["extra"] = extra
+        seen["voice"] = voice
         yield {"text": "It is warm."}
 
     monkeypatch.setattr(server, "talk_stream", fake_stream)
-    r = server.app.test_client().post("/talk", json={"messages": [{"role": "user", "content": "weather"}], "lang": "en-IN", "lat": 19.1, "lon": 72.9})
+    r = server.app.test_client().post("/talk", json={"messages": [{"role": "user", "content": "weather"}], "lang": "en-IN", "lat": 19.1, "lon": 72.9, "voice": False})
     lines = [json.loads(x) for x in r.get_data(as_text=True).splitlines()]
+    assert seen["voice"] is False
     assert lines[0] == {"intent": "weather"} and lines[1]["text"] == "It is warm." and seen["extra"] == "LIVE DATA 19.1 72.9"
 
 
@@ -489,3 +491,25 @@ def test_feedback_goes_to_telegram_when_set(tmp_path, monkeypatch):
     monkeypatch.setattr(tools.requests, "post", lambda url, **k: sent.update(url=url, body=k["json"]) or R())
     out = tools.save_feedback("complaint", "too slow", "hi-IN")
     assert out["telegram"] is True and sent["body"]["chat_id"] == "42" and "too slow" in sent["body"]["text"]
+
+
+def test_tts_asks_for_small_audio_then_falls_back(monkeypatch):
+    from tilda import talk
+    calls = []
+
+    class R:
+        def __init__(self, code):
+            self.status_code = code
+            self.text = "bad"
+
+        def json(self):
+            return {"audios": ["QUJD"]}
+
+    def fake_post(url, **k):
+        calls.append(k["json"])
+        return R(422 if "output_audio_codec" in k["json"] else 200)
+
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    monkeypatch.setattr(talk.requests, "post", fake_post)
+    assert talk.speak("hello", "en-IN") == "QUJD"
+    assert calls[0]["output_audio_codec"] == "mp3" and "output_audio_codec" not in calls[1]

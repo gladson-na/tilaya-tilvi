@@ -78,7 +78,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       _recMe = false;
       _recOther = false;
     });
-    if (held < 600) {
+    if (held < 600 || wav.length < 600) {
       _set(() => _status = 'Hold the button the whole time you speak.');
       return;
     }
@@ -93,7 +93,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       _status = 'Reading...';
     });
     try {
-      final j = await Api.transcribe(wav, src, [src]);
+      final j = await Api.transcribe(wav, src, [src], ext: _mic.ext);
       final said = ((j['text'] ?? '') as String).trim();
       if (said.isEmpty) {
         _set(() => _status = 'I did not catch that. Hold the button and try again.');
