@@ -61,7 +61,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     _downAt = DateTime.now().millisecondsSinceEpoch;
     final ok = await _mic.start((_) {});
     if (!ok) {
-      _set(() => _status = 'Please allow the microphone for Tilda.');
+      _set(() => _status = 'Allow the microphone.');
       return;
     }
     _set(() {
@@ -80,7 +80,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       _recOther = false;
     });
     if (held < 600 || wav.length < 600) {
-      _set(() => _status = 'Hold the button the whole time you speak.');
+      _set(() => _status = 'Keep holding while you speak.');
       return;
     }
     await _process(me, wav);
@@ -97,7 +97,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final j = await Api.transcribe(wav, src, [src], ext: _mic.ext);
       final said = ((j['text'] ?? '') as String).trim();
       if (said.isEmpty) {
-        _set(() => _status = 'I did not catch that. Hold the button and try again.');
+        _set(() => _status = 'Not heard. Hold and try again.');
         return;
       }
       _set(() => _status = 'Translating...');
@@ -114,7 +114,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       });
       await _speak(out, dst, me);
     } catch (_) {
-      _set(() => _status = 'Could not reach the server. Check the internet and try again.');
+      _set(() => _status = 'No internet. Try again.');
     } finally {
       _set(() => _busy = false);
     }
@@ -136,6 +136,30 @@ class _TranslateScreenState extends State<TranslateScreen> {
       await _tts.speak(text);
     } catch (_) {}
   }
+
+  Widget _ear(String side, bool lit, Color accent) => Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: lit ? accent : Colors.transparent,
+          border: Border.all(color: lit ? accent : Colors.white24, width: 2),
+        ),
+        child: Text(side, style: TextStyle(color: lit ? Colors.black : Colors.white38, fontWeight: FontWeight.w800, fontSize: 18)),
+      );
+
+  /// Picture of which earbud this person wears: the other person on the left, me on the right.
+  Widget _earGuide(bool me, Color accent) => Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          _ear('L', !me, accent),
+          const SizedBox(width: 10),
+          Icon(me ? Icons.person : Icons.people_alt, color: accent, size: 28),
+          const SizedBox(width: 10),
+          _ear('R', me, accent),
+        ]),
+      );
 
   Widget _panel(bool me) {
     final lang = me ? _me : _other;
@@ -164,6 +188,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ),
           ),
         ]),
+        if (_buds) _earGuide(me, accent),
         Expanded(
           child: SingleChildScrollView(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -208,64 +233,48 @@ class _TranslateScreenState extends State<TranslateScreen> {
   Widget build(BuildContext context) => Scaffold(
         backgroundColor: kNavy,
         body: SafeArea(
-          child: Stack(children: [
-            Column(children: [
-              _panel(false),
-              SizedBox(
-                height: 34,
-                child: Center(
-                  child: _busy
-                      ? Row(mainAxisSize: MainAxisSize.min, children: [
-                          const TildaOrb(state: OrbState.thinking, size: 34),
-                          const SizedBox(width: 6),
-                          Text(_status, style: const TextStyle(color: Colors.white70)),
-                        ])
-                      : Text(_status, style: const TextStyle(color: Colors.amberAccent)),
-                ),
-              ),
-              _panel(true),
-            ]),
-            Positioned(
-              right: 8,
-              top: 0,
-              bottom: 0,
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Material(
-                  color: _buds ? kTeal : kCard,
-                  shape: const StadiumBorder(),
-                  child: InkWell(
-                    customBorder: const StadiumBorder(),
-                    onTap: () => _set(() {
-                      _buds = !_buds;
-                      _status = _buds ? 'Earbuds on: they hear in the left ear, you hear in the right.' : '';
-                    }),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.headphones, size: 18, color: _buds ? Colors.black : Colors.white70),
-                        const SizedBox(width: 6),
-                        Text(_buds ? 'Earbuds on' : 'Use earbuds',
-                            style: TextStyle(color: _buds ? Colors.black : Colors.white70, fontWeight: FontWeight.w600)),
-                      ]),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 4,
-              top: 0,
-              bottom: 0,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: IconButton(
+          child: Column(children: [
+            _panel(false),
+            SizedBox(
+              height: 52,
+              child: Row(children: [
+                IconButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                   icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white54, size: 18),
                   tooltip: 'Back',
                 ),
-              ),
+                Expanded(
+                  child: Center(
+                    child: _busy
+                        ? Row(mainAxisSize: MainAxisSize.min, children: [
+                            const TildaOrb(state: OrbState.thinking, size: 34),
+                            const SizedBox(width: 6),
+                            Flexible(child: Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+                          ])
+                        : Text(_status, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.amberAccent, fontSize: 13)),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Material(
+                    color: _buds ? kTeal : kCard,
+                    shape: const StadiumBorder(),
+                    child: InkWell(
+                      customBorder: const StadiumBorder(),
+                      onTap: () => _set(() {
+                        _buds = !_buds;
+                        _status = '';
+                      }),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        child: Icon(Icons.headphones, size: 24, color: _buds ? Colors.black : Colors.white70),
+                      ),
+                    ),
+                  ),
+                ),
+              ]),
             ),
+            _panel(true),
           ]),
         ),
       );
