@@ -11,6 +11,7 @@ pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-
 @media(prefers-color-scheme:dark){body{background:#111;color:#eee}pre{background:#222}select{background:#222;color:#eee}}
 </style></head><body>
 <h2>Tilda test page</h2>
+<div id="keynote" style="display:none;background:#fff3cd;color:#664d03;padding:10px;border-radius:8px;margin-bottom:10px"></div>
 <p>Say a greeting and the name first, e.g. "Namaskaram Tilda", then speak.</p>
 <select id="lang"><option value="auto">Auto (greeting, then detect)</option></select>
 <button id="rec">Tap or hold to record</button>
@@ -19,6 +20,7 @@ pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-
 <script>
 const rec=document.getElementById('rec'),logEl=document.getElementById('log'),textEl=document.getElementById('text');
 Promise.all([fetch('languages').then(r=>r.json()),fetch('beta').then(r=>r.json())]).then(([l,b])=>l.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c+(b.includes(c)?' (beta)':'');document.getElementById('lang').append(o)}));
+fetch('status').then(r=>r.json()).then(s=>{const k=document.getElementById('keynote');if(s.demo){k.style.display='block';k.textContent='Demo mode: answers are sample text. Set SARVAM_API_KEY or GROQ_API_KEY for real voice.'}else if(!s.ready){k.style.display='block';k.textContent='Key not set: add SARVAM_API_KEY or GROQ_API_KEY (see .env.example) to turn on real voice. The app itself is running.'}}).catch(()=>{});
 let mr,stream,rot,sess=0,seq=0,timer,t0,downAt=0,starting=false,stopAfterStart=false;
 const SEG_MS=8000; // speech is cut into 8 s pieces, each saved on the phone the moment it ends
 const HOLD_MS=450; // press longer than this = hold mode (release stops); shorter = tap mode (tap again stops)

@@ -15,6 +15,18 @@ jobs:
       - run: PYTHONPATH=. python -m pytest -q
         working-directory: backend
 
+  docker-compose-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start with one command and no keys, like the judges will
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 30); do curl -sf http://localhost:8000/health && break; sleep 3; done
+          curl -sf http://localhost:8000/ | grep -q "Tilda test page"
+          curl -sf http://localhost:8000/status
+          docker compose down
+
   android:
     runs-on: ubuntu-latest
     steps:

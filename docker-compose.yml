@@ -1,0 +1,19 @@
+# Start Tilda with one command:  docker compose up
+# Then open http://localhost:8000
+# It starts with no keys: the page shows a "key not set" note until you add one in .env
+services:
+  tilda:
+    build: ./backend
+    ports:
+      - "8000:10000"
+    environment:
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      TILDA_FAKE: ${TILDA_FAKE:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:10000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

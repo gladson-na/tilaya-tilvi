@@ -79,6 +79,14 @@ def health():
     return "ok"
 
 
+@app.get("/status")
+def status():
+    """Which voice keys are set. The test page shows a plain 'key not set' note instead of failing."""
+    sarvam, groq = bool(os.environ.get("SARVAM_API_KEY")), bool(os.environ.get("GROQ_API_KEY"))
+    demo = bool(os.environ.get("TILDA_FAKE"))
+    return jsonify(sarvam=sarvam, groq=groq, demo=demo, ready=demo or sarvam or groq)
+
+
 @app.post("/act")
 def act():
     return jsonify(interpret((request.get_json(silent=True) or {}).get("text", "")))
