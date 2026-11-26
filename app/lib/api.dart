@@ -82,7 +82,7 @@ class Api {
   static Future<String> summary(String text, String lang) async {
     final res = await http
         .post(Uri.parse('$base/summary'),
-            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang, if (pan != null) 'pan': pan}))
+            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang}))
         .timeout(const Duration(seconds: 60));
     final j = jsonDecode(res.body) as Map<String, dynamic>;
     if (j['error'] != null) throw Exception('${j['error']}');
@@ -95,7 +95,7 @@ class Api {
     try {
       final res = await http
           .post(Uri.parse('$base/speak'),
-              headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang}))
+              headers: {'Content-Type': 'application/json'}, body: jsonEncode({'text': text, 'lang': lang, if (pan != null) 'pan': pan}))
           .timeout(const Duration(seconds: 40));
       final j = jsonDecode(res.body) as Map<String, dynamic>;
       final a = j['audio'] as String?;
