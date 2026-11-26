@@ -88,8 +88,8 @@ class _SetupScreenState extends State<SetupScreen> {
 
 /// Three big buttons. That is the whole app.
 class HomeScreen extends StatelessWidget {
-  final VoidCallback onTalk, onNotes, onTranslate, onSettings;
-  const HomeScreen({super.key, required this.onTalk, required this.onNotes, required this.onTranslate, required this.onSettings});
+  final VoidCallback onTalk, onCapture, onNotes, onTranslate, onSettings;
+  const HomeScreen({super.key, required this.onTalk, required this.onCapture, required this.onNotes, required this.onTranslate, required this.onSettings});
 
   Widget _big(IconData icon, String title, String sub, Color c, VoidCallback f) => Expanded(
         child: Padding(
@@ -139,9 +139,10 @@ class HomeScreen extends StatelessWidget {
                 IconButton(onPressed: onSettings, icon: const Icon(Icons.settings, color: Colors.white70)),
               ]),
               const SizedBox(height: 4),
-              const TildaOrb(state: OrbState.idle, size: 150),
+              const TildaOrb(state: OrbState.idle, size: 110),
               const SizedBox(height: 8),
               _big(Icons.graphic_eq, 'Talk to Tilda', 'Ask anything, out loud', kBlue, onTalk),
+              _big(Icons.photo_camera, 'Capture', 'Read a sign, bill or medicine', kPink, onCapture),
               _big(Icons.edit_note, 'Take notes', 'Listens to a class or video', kTeal, onNotes),
               _big(Icons.translate, 'Translate', 'Two people, two languages', kOrange, onTranslate),
             ]),
