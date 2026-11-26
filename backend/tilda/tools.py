@@ -201,7 +201,7 @@ def save_feedback(kind: str, text: str, lang: str = "", who: str = "") -> dict:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:
         pass
-    return {"saved": True, "emailed": _email(rec)}
+    return {"saved": True, "emailed": _email(rec), "telegram": _telegram(rec)}
 
 
 def _email(rec: dict) -> bool:
@@ -244,3 +244,16 @@ def summarize(text: str, lang_name: str) -> str:
         except (requests.RequestException, KeyError, IndexError, ValueError):
             pass
     raise ToolError("no summary engine answered")
+
+
+def _telegram(rec: dict) -> bool:
+    """Free and instant: a message to your own Telegram when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set."""
+    tok, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    if not tok or not chat:
+        return False
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage", timeout=15,
+                          json={"chat_id": chat, "text": f"Tilda {rec['kind']} ({rec['lang'] or '?'})\n\n{rec['text']}"})
+        return r.status_code == 200
+    except requests.RequestException:
+        return False

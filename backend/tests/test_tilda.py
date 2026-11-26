@@ -474,3 +474,18 @@ def test_summary_route(monkeypatch):
     assert c.post("/summary", json={"text": "short"}).status_code == 400
     r = c.post("/summary", json={"text": "a long class about photosynthesis in plants " * 3, "lang": "hi-IN"})
     assert r.get_json()["text"].startswith("Notes in Hindi")
+
+
+def test_feedback_goes_to_telegram_when_set(tmp_path, monkeypatch):
+    from tilda import tools
+    sent = {}
+
+    class R:
+        status_code = 200
+
+    monkeypatch.setenv("FEEDBACK_LOG", str(tmp_path / "f.jsonl"))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    monkeypatch.setattr(tools.requests, "post", lambda url, **k: sent.update(url=url, body=k["json"]) or R())
+    out = tools.save_feedback("complaint", "too slow", "hi-IN")
+    assert out["telegram"] is True and sent["body"]["chat_id"] == "42" and "too slow" in sent["body"]["text"]
