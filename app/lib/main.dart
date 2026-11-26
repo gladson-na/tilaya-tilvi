@@ -55,12 +55,14 @@ class _BubbleState extends State<_Bubble> {
           'recording': Colors.red,
           'working': Colors.amber,
           'done': Colors.green,
+          'nothing': Colors.blueGrey,
         }[_state] ??
         Colors.teal;
     final icon = {
           'recording': Icons.stop,
           'working': Icons.hourglass_top,
           'done': Icons.check,
+          'nothing': Icons.mic_off,
         }[_state] ??
         Icons.graphic_eq;
     return Material(
@@ -355,7 +357,7 @@ class _HomePageState extends State<HomePage> {
       Future.delayed(const Duration(seconds: 2), () => _tellBubble('idle'));
       if (mounted) setState(() => _info = 'Typed live.');
     } else {
-      _tellBubble('idle');
+      _tellBubble('nothing');
       if (mounted) setState(() => _info = 'I did not hear any words, so I closed.');
     }
   }
@@ -427,7 +429,7 @@ class _HomePageState extends State<HomePage> {
     _closing = true;
     _bubbleSession = false;
     await _stop();
-    _tellBubble('idle');
+    _tellBubble('nothing');
     if (mounted) setState(() => _info = 'I did not hear any words, so I closed.');
     _closing = false;
   }

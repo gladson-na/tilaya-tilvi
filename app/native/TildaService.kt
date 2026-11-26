@@ -72,12 +72,12 @@ class TildaService : AccessibilityService() {
     }
 
     private fun paint(v: TextView) {
-        val c = when (st) { "recording" -> Color.RED; "working" -> Color.rgb(255, 160, 0); "done" -> Color.rgb(40, 160, 70); else -> Color.rgb(0, 150, 136) }
+        val c = when (st) { "recording" -> Color.RED; "working" -> Color.rgb(255, 160, 0); "nothing" -> Color.rgb(96, 125, 139); "done" -> Color.rgb(40, 160, 70); else -> Color.rgb(0, 150, 136) }
         val g = GradientDrawable()
         g.shape = GradientDrawable.OVAL
         g.setColor(c)
         v.background = g
-        v.text = labelOverride ?: when (st) { "recording" -> "■"; "working" -> "…"; "done" -> "✓"; else -> "🎙" }
+        v.text = labelOverride ?: when (st) { "recording" -> "■"; "working" -> "…"; "done" -> "✓"; "nothing" -> "🔇"; else -> "🎙" }
         animateBubble(v)
     }
 
@@ -168,6 +168,7 @@ class TildaService : AccessibilityService() {
     fun setState(s: String) {
         st = s
         bubble?.let { paint(it) }
+        if (s == "nothing") handler.postDelayed({ if (st == "nothing") setState("idle") }, 2500)
         if (s == "idle" && !onField) handler.postDelayed(hideR, 2500)
     }
 
