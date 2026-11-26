@@ -21,7 +21,10 @@ class NotesScreen extends StatefulWidget {
 }
 
 class _NotesScreenState extends State<NotesScreen> {
-  final _mic = Mic();
+  final _mic = Mic(clean: false);
+  bool _internal = false; // recording the phone's own sound instead of the microphone
+  DateTime _capT0 = DateTime.now();
+  Timer? _lvlT;
   Timer? _cut;
   bool _on = false;
   bool _quiet = false;
@@ -53,6 +56,7 @@ class _NotesScreenState extends State<NotesScreen> {
   @override
   void dispose() {
     _cut?.cancel();
+    _lvlT?.cancel();
     _mic.dispose();
     if (_on) _service(false);
     super.dispose();
@@ -66,20 +70,51 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 
   Future<void> _start() async {
-    final ok = await _mic.start(_onLevel);
-    if (!ok) {
+    if (!await _mic.permit()) {
       _set(() => _status = 'Please allow the microphone for Tilda.');
       return;
     }
-    await _service(true); // after the microphone is allowed: Android refuses a mic service before that
+    // First choice: the phone's own sound (works with the volume down, on Bluetooth, anywhere).
+    _internal = false;
+    if (Platform.isAndroid) {
+      try {
+        _internal = (await _native.invokeMethod('captureStart')) == true;
+      } catch (_) {}
+    }
+    if (_internal) {
+      _capT0 = DateTime.now();
+      _lvlT = Timer.periodic(const Duration(milliseconds: 250), (_) async {
+        try {
+          final v = await _native.invokeMethod('captureLevel');
+          if (v is num) _onLevel(v.toDouble());
+        } catch (_) {}
+      });
+    } else {
+      // Fallback: the microphone, which only hears what the speaker plays.
+      if (!await _mic.start(_onLevel)) {
+        _set(() => _status = 'Please allow the microphone for Tilda.');
+        return;
+      }
+      await _service(true); // after the microphone is allowed: Android refuses a mic service before that
+    }
     _lastLoud = DateTime.now();
     _cut = Timer.periodic(const Duration(seconds: 2), (_) => _slice());
     _set(() {
       _on = true;
       _quiet = false;
       _summary = '';
-      _status = 'Listening. Notes are being written.';
+      _tab = 0;
+      _status = _internal ? 'Listening to the phone\'s sound. Notes are being written.' : 'Listening with the microphone. Notes are being written.';
     });
+  }
+
+  double get _secs => _internal ? DateTime.now().difference(_capT0).inMilliseconds / 1000 : _mic.seconds;
+
+  Future<Uint8List> _rotate() async {
+    if (!_internal) return _mic.rotate();
+    _capT0 = DateTime.now();
+    final p = await _native.invokeMethod<Uint8List>('captureTake');
+    return p == null || p.length < 3200 ? Uint8List(0) : pcmToWav(p);
   }
 
   void _onLevel(double l) {
@@ -89,19 +124,19 @@ class _NotesScreenState extends State<NotesScreen> {
     if (q != _quiet && mounted) {
       setState(() {
         _quiet = q;
-        _status = q ? 'I cannot hear anything. Is the video playing, and the volume up?' : 'Listening. Notes are being written.';
+        _status = q ? (_internal ? 'Nothing is playing. Start the video.' : 'I cannot hear anything. Is the video playing, and the volume up?') : 'Listening. Notes are being written.';
       });
     }
   }
 
   /// Every 10 to 20 seconds (waiting for a pause in the talking) the recording so far is sent off and a new one starts.
   Future<void> _slice() async {
-    if (!_mic.on || _rotating) return;
-    final t = _mic.seconds;
+    if (!(_internal || _mic.on) || _rotating) return;
+    final t = _secs;
     if (t < 10 || (t < 20 && _lvl > 0.03)) return;
     _rotating = true;
     try {
-      final b = await _mic.rotate();
+      final b = await _rotate();
       if (b.length > 600) {
         _waiting.add(b);
         unawaited(_work());
@@ -118,7 +153,7 @@ class _NotesScreenState extends State<NotesScreen> {
       while (_waiting.isNotEmpty && mounted) {
         final wav = _waiting.first;
         try {
-          final j = await Api.transcribe(wav, 'auto', widget.style.myLangs.toList(), fast: true, ext: _mic.ext);
+          final j = await Api.transcribe(wav, 'auto', widget.style.myLangs.toList(), fast: true, ext: (wav.length > 4 && wav[0] == 0x52 && wav[1] == 0x49) ? 'wav' : _mic.ext);
           _waiting.removeAt(0);
           final text = ((j['text'] ?? '') as String).trim();
           final lang = (j['language'] ?? 'auto') as String;
@@ -185,7 +220,8 @@ class _NotesScreenState extends State<NotesScreen> {
 
   Future<void> _stop() async {
     _cut?.cancel();
-    final rest = await _mic.stop();
+    _lvlT?.cancel();
+    final rest = _internal ? await _rotate() : await _mic.stop();
     await _service(false);
     if (rest.length > 600) _waiting.add(rest);
     _set(() {
@@ -206,6 +242,7 @@ class _NotesScreenState extends State<NotesScreen> {
       final s = await Api.summary(_spoken, _l3.isNotEmpty ? _l3 : (_src == 'auto' ? 'en-IN' : _src));
       _set(() {
         _summary = s;
+        _tab = 3;
         _status = 'Your notes are ready.';
       });
     } catch (_) {
@@ -221,12 +258,13 @@ class _NotesScreenState extends State<NotesScreen> {
     } catch (_) {}
   }
 
-  String get _shown => _tab == 0 ? _spoken : (_tab == 1 ? _lettersText : _meaningText);
+  String get _shown => _tab == 0 ? _spoken : (_tab == 1 ? _lettersText : (_tab == 2 ? _meaningText : _summary));
 
   List<(int, String)> get _tabs => [
         (0, 'As spoken'),
         if (_l2.isNotEmpty) (1, 'In ${_name(_l2)}'),
         if (_l3.isNotEmpty) (2, '${_name(_l3)} meaning'),
+        if (_summary.isNotEmpty) (3, 'Summary'),
       ];
 
   Widget _toggle(String label, String sub, bool v, void Function(bool) f) => SwitchListTile(
@@ -298,7 +336,7 @@ class _NotesScreenState extends State<NotesScreen> {
                   child: SingleChildScrollView(
                     reverse: _on,
                     child: SelectableText(
-                      _summary.isNotEmpty && !_on ? '$_summary\n\n---\n\n$_shown' : (_shown.isEmpty ? '' : _shown),
+                      _shown,
                       style: const TextStyle(color: Colors.white, fontSize: 17, height: 1.4),
                     ),
                   ),
@@ -317,7 +355,7 @@ class _NotesScreenState extends State<NotesScreen> {
               Row(children: [
                 if (_summary.isNotEmpty || _spoken.isNotEmpty)
                   IconButton(
-                    onPressed: () => Clipboard.setData(ClipboardData(text: _summary.isNotEmpty ? '$_summary\n\n$_shown' : _shown)),
+                    onPressed: () => Clipboard.setData(ClipboardData(text: _shown)),
                     icon: const Icon(Icons.copy, color: Colors.white70),
                     tooltip: 'Copy',
                   ),

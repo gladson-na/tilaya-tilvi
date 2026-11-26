@@ -12,7 +12,7 @@ cp native/tilda_accessibility.xml android/app/src/main/res/xml/
 cp native/tilda_strings.xml android/app/src/main/res/values/
 M=android/app/src/main/AndroidManifest.xml
 SVC="<service android:name=\"$PKG.TildaService\" android:exported=\"true\" android:label=\"Tilda typing\" android:permission=\"android.permission.BIND_ACCESSIBILITY_SERVICE\"><intent-filter><action android:name=\"android.accessibilityservice.AccessibilityService\"/></intent-filter><meta-data android:name=\"android.accessibilityservice\" android:resource=\"@xml/tilda_accessibility\"/></service>"
-NS="<service android:name=\"$PKG.NotesService\" android:exported=\"false\" android:foregroundServiceType=\"microphone\"/>"
+NS="<service android:name=\"$PKG.NotesService\" android:exported=\"false\" android:foregroundServiceType=\"microphone|mediaProjection\"/>"
 sed -i "s#</application>#$SVC$NS</application>#" "$M"
 grep -c TildaService "$M"
 grep -c NotesService "$M"

@@ -209,6 +209,10 @@ Uint8List slimWav(Uint8List wav) {
 /// A microphone that records small compressed audio (Opus, about 2 KB per second, ten times smaller
 /// than plain WAV) and reports how loud it is. Small recordings are what make Tilda work on 2G.
 class Mic {
+  Mic({this.clean = true});
+
+  /// Echo and noise cancelling help when you talk to the phone, but they would also remove a video's sound, so Notes turns them off.
+  final bool clean;
   final _rec = AudioRecorder();
   StreamSubscription<Amplitude>? _amp;
   String? _path;
@@ -224,6 +228,8 @@ class Mic {
   /// dB below full scale (as the recorder reports it) to a loudness between 0 and 1.
   static double level(double db) => db.isFinite ? math.pow(10, db / 20).toDouble() : 0.0;
 
+  Future<bool> permit() => _rec.hasPermission();
+
   Future<bool> start(void Function(double level) onLevel) async {
     if (_on) return true;
     if (!await _rec.hasPermission()) return false;
@@ -238,7 +244,7 @@ class Mic {
     ext = opus ? 'ogg' : 'm4a';
     final path = '${dir.path}/tilda_${DateTime.now().microsecondsSinceEpoch}.$ext';
     await _rec.start(
-        RecordConfig(encoder: opus ? AudioEncoder.opus : AudioEncoder.aacLc, sampleRate: 16000, numChannels: 1, bitRate: 20000, echoCancel: true, noiseSuppress: true, autoGain: true),
+        RecordConfig(encoder: opus ? AudioEncoder.opus : AudioEncoder.aacLc, sampleRate: 16000, numChannels: 1, bitRate: 20000, echoCancel: clean, noiseSuppress: clean, autoGain: clean, audioInterruption: AudioInterruptionMode.none),
         path: path);
     _path = path;
     _t0 = DateTime.now();
