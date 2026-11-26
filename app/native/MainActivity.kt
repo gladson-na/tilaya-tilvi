@@ -1,12 +1,30 @@
 package PKG_NAME
 
+import android.content.Context
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var pending: MethodChannel.Result? = null
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 4242) return
+        val r = pending ?: return
+        pending = null
+        if (resultCode == RESULT_OK && data != null) {
+            try {
+                val i = Intent(this, NotesService::class.java).putExtra("code", resultCode).putExtra("data", data)
+                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                r.success(true)
+            } catch (e: Exception) { r.success(false) }
+        } else r.success(false)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tilda/native")
@@ -29,6 +47,16 @@ class MainActivity : FlutterActivity() {
                         res.success(true)
                     } catch (e: Exception) { res.success(false) }
                 }
+                "captureStart" -> {
+                    if (android.os.Build.VERSION.SDK_INT < 29) res.success(false)
+                    else try {
+                        pending = res
+                        val m = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                        startActivityForResult(m.createScreenCaptureIntent(), 4242)
+                    } catch (e: Exception) { pending = null; res.success(false) }
+                }
+                "captureTake" -> res.success(NotesService.take())
+                "captureLevel" -> res.success(NotesService.level)
                 "notesOff" -> { stopService(Intent(this, NotesService::class.java)); res.success(true) }
                 "toBack" -> { moveTaskToBack(true); res.success(true) }
                 "settings" -> {
