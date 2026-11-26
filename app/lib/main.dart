@@ -804,7 +804,7 @@ class _HomePageState extends State<HomePage> {
             if (mounted) {
               setState(() {
                 _refreshText();
-                _info = 'Engine: ${j['engine']}\nLanguage: ${j['language']}\nGreeting found: ${j['greeting_found']}';
+                _info = 'Engine: ${j['engine']}\nLanguage: ${j['language']}\nGreeting found: ${j['greeting_found']}\nHeard first: ${j['heard_first']}\nText: ${j['text']}';
               });
             }
             continue;
