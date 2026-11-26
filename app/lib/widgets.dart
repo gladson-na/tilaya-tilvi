@@ -7,6 +7,7 @@ const kCard = Color(0xFF14224A);
 const kTeal = Color(0xFF2DD4BF);
 const kBlue = Color(0xFF3B82F6);
 const kOrange = Color(0xFFFB923C);
+const kPink = Color(0xFFF472B6);
 
 enum OrbState { idle, listening, reading, thinking, speaking }
 

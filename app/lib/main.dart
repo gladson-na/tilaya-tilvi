@@ -16,6 +16,7 @@ import 'live_stt.dart';
 import 'offline_asr.dart';
 import 'personal_style.dart';
 import 'api.dart';
+import 'screen_capture.dart';
 import 'screen_home.dart';
 import 'screen_notes.dart';
 import 'screen_talk.dart';
@@ -267,6 +268,7 @@ class _HomePageState extends State<HomePage> {
     }
     return HomeScreen(
       onTalk: () => _open(TalkScreen(style: _style)),
+      onCapture: () => _open(CaptureScreen(style: _style)),
       onNotes: () => _open(NotesScreen(style: _style)),
       onTranslate: () => _open(TranslateScreen(style: _style)),
       onSettings: _openSettings,

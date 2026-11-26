@@ -1,6 +1,7 @@
 import json
 import time
 import pytest
+from tilda import tools
 from tilda.engines import Engine, EngineError, Result
 from tilda.greetings import detect_greeting
 from tilda.router import AllEnginesFailed, transcribe, transcribe_with_greeting
@@ -526,3 +527,35 @@ def test_speak_route_pans_for_earbuds(monkeypatch):
     assert r.get_json()["audio"] == "UEFO" and seen["side"] == "l"
     r = c.post("/speak", json={"text": "hi", "lang": "hi-IN"})
     assert r.get_json()["audio"] == "QUJD"
+
+
+def test_camera_phrases_open_the_camera():
+    for say in ["Hey Tilda, read this", "please scan this", "open the camera", "what does this say", "यह पढ़ो"]:
+        assert tools.context_for([{"role": "user", "content": say}])["intent"] == "camera", say
+    assert tools.context_for([{"role": "user", "content": "what is the weather"}], 1, 2)["intent"] != "camera"
+
+
+def test_read_route_demo_and_missing_photo(monkeypatch):
+    import tilda.server as srv
+    c = srv.app.test_client()
+    assert c.post("/read", json={"image": "x"}).status_code == 400
+    monkeypatch.setenv("TILDA_FAKE", "1")
+    r = c.post("/read", json={"image": "A" * 200, "lang": "hi-IN"}).get_json()
+    assert r["text"] and r["original"]
+
+
+def test_read_image_needs_key_and_parses_answer(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    try:
+        tools.read_image("QUJD", "Hindi")
+        assert False
+    except tools.ToolError as e:
+        assert "key not set" in str(e)
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+
+    class R:
+        status_code = 200
+        def json(self):
+            return {"choices": [{"message": {"content": '{"original": "Exit", "translation": "बाहर निकलें"}'}}]}
+    monkeypatch.setattr(tools.requests, "post", lambda *a, **k: R())
+    assert tools.read_image("QUJD", "Hindi") == {"original": "Exit", "text": "बाहर निकलें"}

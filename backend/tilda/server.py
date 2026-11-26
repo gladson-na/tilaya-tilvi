@@ -162,6 +162,22 @@ def feedback():
     return jsonify(tools.save_feedback(kind, text, str(j.get("lang", ""))[:12], str(j.get("who", ""))[:60]))
 
 
+@app.post("/read")
+def read_photo():
+    """A photo of text (sign, medicine strip, bill) in, the text and its translation out."""
+    j = request.get_json(silent=True) or {}
+    img, lang = str(j.get("image", "")), j.get("lang", "en-IN")
+    if len(img) < 100:
+        return jsonify(error="no photo received"), 400
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(original="(demo) Take one tablet after food", text="(demo) खाने के बाद एक गोली लें")
+    from .translate import NAMES
+    try:
+        return jsonify(tools.read_image(img, NAMES.get(lang, "English")))
+    except tools.ToolError as e:
+        return jsonify(error=str(e)), 502
+
+
 @app.post("/summary")
 def do_summary():
     j = request.get_json(silent=True) or {}

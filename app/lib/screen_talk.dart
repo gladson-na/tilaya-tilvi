@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'api.dart';
 import 'personal_style.dart';
+import 'screen_capture.dart';
 import 'widgets.dart';
 
 final _needsPlace = RegExp(
@@ -229,11 +230,13 @@ class _TalkScreenState extends State<TalkScreen> {
     if (_needsPlace.hasMatch(said) && _lat == null) await _place();
     var answer = '';
     var spoke = false;
+    var wantCamera = false;
     var chain = Future<void>.value();
     try {
       final recent = _history.length > 12 ? _history.sublist(_history.length - 12) : _history;
       await for (final j in Api.talk(recent, _speakLang, lat: _lat, lon: _lon)) {
         final intent = j['intent'] as String?;
+        if (intent == 'camera') wantCamera = true;
         if (intent == 'complaint' || intent == 'suggestion') {
           _set(() {
             _fbKind = intent;
@@ -269,6 +272,12 @@ class _TalkScreenState extends State<TalkScreen> {
     }
     _finishing = false;
     _set(() => _orb = OrbState.idle);
+    if (wantCamera && mounted) {
+      await _stopAll();
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => CaptureScreen(style: widget.style, autoStart: true)));
+      return;
+    }
     final typed = _viaType;
     _viaType = false;
     if (typed) {

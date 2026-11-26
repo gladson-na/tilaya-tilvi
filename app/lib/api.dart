@@ -89,6 +89,17 @@ class Api {
     return (j['text'] ?? '') as String;
   }
 
+  /// A photo of text (sign, medicine strip, bill): its words and their translation.
+  static Future<Map<String, dynamic>> readPhoto(String imageB64, String lang) async {
+    final res = await http
+        .post(Uri.parse('$base/read'),
+            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'image': imageB64, 'lang': lang}))
+        .timeout(const Duration(seconds: 70));
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    if (j['error'] != null) throw Exception('${j['error']}');
+    return j;
+  }
+
   /// Sarvam voice as audio bytes, or null if the server voice is not available.
   static Future<Uint8List?> speak(String text, String lang, {String? pan}) async {
     if (slow) return null; // slow internet: the phone's own voice, nothing to download

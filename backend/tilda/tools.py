@@ -160,6 +160,40 @@ def distance(lat: float, lon: float, text: str) -> str:
     return f"Road distance from the user's location to {name}: about {km:.1f} km, around {mins} minutes by car."
 
 
+CAMERA_RE = re.compile(
+    r"\b(read|scan|translate|capture)\s+(this|that|it)\b|\b(open|start|use)\s+(the\s+)?camera\b|\btake\s+(a\s+)?(photo|picture|pic)\b"
+    r"|\bwhat does (this|that) say\b|यह पढ़|ये पढ़|कैमरा खोल|కెమెరా", re.I)
+
+VISION_MODELS = ("meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct")
+
+
+def read_image(image_b64: str, lang_name: str) -> dict:
+    """Reads the text in a photo and translates it. Returns {"original": ..., "text": translation in lang_name}."""
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise ToolError("key not set: add GROQ_API_KEY to read photos")
+    prompt = (f"Read all the text you can see in this photo (a sign, a medicine strip, a bill, a board, a page). "
+              f"Reply with JSON only: {{\"original\": the text exactly as written, \"translation\": that text translated into {lang_name}, "
+              "written the way a person would say it out loud, short and clear}. If a medicine or label has numbers, keep them exact. "
+              "If there is no readable text, use empty strings.")
+    last = "no vision model answered"
+    for model in VISION_MODELS:
+        try:
+            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"}, timeout=50, json={
+                "model": model, "temperature": 0.1, "max_tokens": 900, "response_format": {"type": "json_object"},
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}}]}]})
+            if r.status_code != 200:
+                last = f"{model}: {r.status_code}"
+                continue
+            j = json.loads(r.json()["choices"][0]["message"]["content"])
+            return {"original": str(j.get("original") or "").strip(), "text": str(j.get("translation") or "").strip()}
+        except (requests.RequestException, KeyError, IndexError, ValueError) as e:
+            last = f"{model}: {type(e).__name__}"
+    raise ToolError("could not read the photo just now (" + last + ")")
+
+
 def context_for(messages, lat=None, lon=None) -> dict:
     """What Tilda should know before she answers: {"extra": text for the model, "intent": name or None}."""
     last = ""
@@ -170,6 +204,8 @@ def context_for(messages, lat=None, lon=None) -> dict:
     if not last:
         return {"extra": "", "intent": None}
     try:
+        if CAMERA_RE.search(last):
+            return {"intent": "camera", "extra": "The user wants to read something with the camera. Reply with one short friendly line like 'Opening the camera.' and nothing else."}
         if FEEDBACK_RE.search(last):
             kind = "complaint" if COMPLAINT_RE.search(last) else "suggestion"
             return {"intent": kind, "extra": (
