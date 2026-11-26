@@ -145,7 +145,7 @@ class _TalkScreenState extends State<TalkScreen> {
       _lastVoice = now;
     }
     setState(() => _level = l);
-    if (_voiced && now.difference(_lastVoice).inMilliseconds > 1100) {
+    if (_voiced && now.difference(_lastVoice).inMilliseconds > 1800) {
       unawaited(_finish());
     } else if (!_voiced && now.difference(_t0).inSeconds > 14) {
       unawaited(_stopAll());
