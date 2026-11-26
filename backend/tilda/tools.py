@@ -201,12 +201,15 @@ def save_feedback(kind: str, text: str, lang: str = "", who: str = "") -> dict:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:
         pass
-    return {"saved": True, "emailed": _email(rec), "telegram": _telegram(rec)}
+    why = {}
+    return {"saved": True, "emailed": _email(rec, why), "telegram": _telegram(rec, why), "why": why}
 
 
-def _email(rec: dict) -> bool:
+def _email(rec: dict, why: dict | None = None) -> bool:
     key, to = os.environ.get("BREVO_API_KEY"), os.environ.get("FEEDBACK_TO")
     if not key or not to:
+        if why is not None:
+            why["email"] = "BREVO_API_KEY or FEEDBACK_TO missing"
         return False
     try:
         r = requests.post("https://api.brevo.com/v3/smtp/email", headers={"api-key": key}, timeout=15, json={
@@ -214,8 +217,12 @@ def _email(rec: dict) -> bool:
             "to": [{"email": to}],
             "subject": f"Tilda {rec['kind']} ({rec['lang'] or 'language unknown'})",
             "textContent": f"{rec['kind'].title()} received {rec['time']}\nLanguage: {rec['lang']}\n\n{rec['text']}"})
+        if why is not None and r.status_code not in (200, 201):
+            why["email"] = f"{r.status_code} {r.text[:160]}"
         return r.status_code in (200, 201)
-    except requests.RequestException:
+    except requests.RequestException as e:
+        if why is not None:
+            why["email"] = type(e).__name__
         return False
 
 
@@ -246,14 +253,20 @@ def summarize(text: str, lang_name: str) -> str:
     raise ToolError("no summary engine answered")
 
 
-def _telegram(rec: dict) -> bool:
+def _telegram(rec: dict, why: dict | None = None) -> bool:
     """Free and instant: a message to your own Telegram when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set."""
     tok, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not tok or not chat:
+        if why is not None:
+            why["telegram"] = "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing"
         return False
     try:
         r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage", timeout=15,
                           json={"chat_id": chat, "text": f"Tilda {rec['kind']} ({rec['lang'] or '?'})\n\n{rec['text']}"})
+        if why is not None and r.status_code != 200:
+            why["telegram"] = f"{r.status_code} {r.text[:160]}"
         return r.status_code == 200
-    except requests.RequestException:
+    except requests.RequestException as e:
+        if why is not None:
+            why["telegram"] = type(e).__name__
         return False
