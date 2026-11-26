@@ -139,6 +139,19 @@ class _NotesScreenState extends State<NotesScreen> {
     }
   }
 
+  /// Changing the extra language right here: redo the extras that are switched on, in the new language.
+  void _pickLang(String? v) {
+    if (v == null || v == _nl) return;
+    widget.style.notesLang = v;
+    unawaited(widget.style.save());
+    _set(() {
+      _lettersText = '';
+      _meaningText = '';
+    });
+    if (_letters) unawaited(_catchUp(letters: true));
+    if (_meaning) unawaited(_catchUp(letters: false));
+  }
+
   /// Turning an extra on halfway: write out everything said so far as well.
   Future<void> _catchUp({required bool letters}) async {
     if (_spoken.isEmpty) return;
@@ -231,6 +244,22 @@ class _NotesScreenState extends State<NotesScreen> {
                     Icon(Icons.fiber_manual_record, size: 14, color: _on ? (_quiet ? Colors.grey : Colors.redAccent) : Colors.white38),
                     const SizedBox(width: 8),
                     const Expanded(child: Text('Written as spoken, in any language', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+                  ]),
+                  Row(children: [
+                    const Text('Extra notes in', style: TextStyle(color: Colors.white70)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButton<String>(
+                        isExpanded: true,
+                        isDense: true,
+                        dropdownColor: kCard,
+                        underline: const SizedBox.shrink(),
+                        value: kLangs.containsKey(_nl) ? _nl : 'hi-IN',
+                        style: const TextStyle(color: kTeal, fontSize: 17, fontWeight: FontWeight.w700),
+                        items: [for (final e in kLangs.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+                        onChanged: _pickLang,
+                      ),
+                    ),
                   ]),
                   _toggle('Also in $_nlName letters', 'Same words, written in $_nlName script', _letters, (v) {
                     _set(() => _letters = v);
