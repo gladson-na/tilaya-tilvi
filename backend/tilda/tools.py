@@ -264,7 +264,9 @@ def _telegram(rec: dict, why: dict | None = None) -> bool:
         r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage", timeout=15,
                           json={"chat_id": chat, "text": f"Tilda {rec['kind']} ({rec['lang'] or '?'})\n\n{rec['text']}"})
         if why is not None and r.status_code != 200:
-            why["telegram"] = f"{r.status_code} {r.text[:160]}"
+            head, _, rest = tok.partition(":")
+            why["telegram"] = (f"{r.status_code} {r.text[:120]} | id={head[:12]} total_len={len(tok)} "
+                               f"secret_len={len(rest)} colons={tok.count(':')} secret_alnum={rest.replace('_','').replace('-','').isalnum()}")
         return r.status_code == 200
     except requests.RequestException as e:
         if why is not None:
