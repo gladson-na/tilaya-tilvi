@@ -25,8 +25,6 @@ class _NotesScreenState extends State<NotesScreen> {
   Timer? _cut;
   bool _on = false;
   bool _quiet = false;
-  bool _letters = false; // also in the notes language's letters
-  bool _meaning = false; // also the meaning in the notes language
   int _tab = 0;
   String _spoken = '', _lettersText = '', _meaningText = '', _summary = '';
   String _src = 'auto';
@@ -38,8 +36,9 @@ class _NotesScreenState extends State<NotesScreen> {
   double _lvl = 0;
   bool _summarising = false;
 
-  String get _nl => widget.style.notesLang;
-  String get _nlName => kLangs[_nl] ?? 'Hindi';
+  String get _l2 => widget.style.copyLang; // second copy ('' = off)
+  String get _l3 => widget.style.meaningLang; // translation ('' = off)
+  String _name(String c) => kLangs[c] ?? c;
 
   void _set(VoidCallback f) {
     if (mounted) setState(f);
@@ -139,42 +138,46 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 
   Future<void> _extras(String text) async {
-    if (_letters) {
+    if (_l2.isNotEmpty) {
       try {
-        final t = await Api.translit(text, _src, _nl);
+        final t = await Api.translit(text, _src, _l2);
         _set(() => _lettersText = _lettersText.isEmpty ? t : '$_lettersText $t');
       } catch (_) {}
     }
-    if (_meaning) {
+    if (_l3.isNotEmpty) {
       try {
-        final t = await Api.translate(text, _src == 'auto' ? 'auto' : _src, _nl);
+        final t = await Api.translate(text, _src == 'auto' ? 'auto' : _src, _l3);
         _set(() => _meaningText = _meaningText.isEmpty ? t : '$_meaningText $t');
       } catch (_) {}
     }
   }
 
-  /// Changing the extra language right here: redo the extras that are switched on, in the new language.
-  void _pickLang(String? v) {
-    if (v == null || v == _nl) return;
-    widget.style.notesLang = v;
+  /// Picking a language for the second copy or the translation ('' switches it off). Everything said so far is redone.
+  void _pick(bool copy, String v) {
+    if (copy) {
+      widget.style.copyLang = v;
+    } else {
+      widget.style.meaningLang = v;
+    }
     unawaited(widget.style.save());
     _set(() {
-      _lettersText = '';
-      _meaningText = '';
+      if (copy) {
+        _lettersText = '';
+      } else {
+        _meaningText = '';
+      }
     });
-    if (_letters) unawaited(_catchUp(letters: true));
-    if (_meaning) unawaited(_catchUp(letters: false));
+    if (v.isNotEmpty) unawaited(_catchUp(letters: copy));
   }
 
-  /// Turning an extra on halfway: write out everything said so far as well.
   Future<void> _catchUp({required bool letters}) async {
     if (_spoken.isEmpty) return;
     try {
       if (letters) {
-        final t = await Api.translit(_spoken, _src, _nl);
+        final t = await Api.translit(_spoken, _src, _l2);
         _set(() => _lettersText = t);
       } else {
-        final t = await Api.translate(_spoken, _src, _nl);
+        final t = await Api.translate(_spoken, _src, _l3);
         _set(() => _meaningText = t);
       }
     } catch (_) {}
@@ -200,7 +203,7 @@ class _NotesScreenState extends State<NotesScreen> {
       return;
     }
     try {
-      final s = await Api.summary(_spoken, _nl);
+      final s = await Api.summary(_spoken, _l3.isNotEmpty ? _l3 : (_src == 'auto' ? 'en-IN' : _src));
       _set(() {
         _summary = s;
         _status = 'Your notes are ready.';
@@ -222,8 +225,8 @@ class _NotesScreenState extends State<NotesScreen> {
 
   List<(int, String)> get _tabs => [
         (0, 'As spoken'),
-        if (_letters) (1, 'In $_nlName letters'),
-        if (_meaning) (2, '$_nlName meaning'),
+        if (_l2.isNotEmpty) (1, 'In ${_name(_l2)}'),
+        if (_l3.isNotEmpty) (2, '${_name(_l3)} meaning'),
       ];
 
   Widget _toggle(String label, String sub, bool v, void Function(bool) f) => SwitchListTile(
@@ -235,6 +238,25 @@ class _NotesScreenState extends State<NotesScreen> {
         value: v,
         onChanged: f,
       );
+
+  Widget _picker(String label, String value, void Function(String) f) => Row(children: [
+        SizedBox(width: 150, child: Text(label, style: const TextStyle(color: Colors.white70))),
+        Expanded(
+          child: DropdownButton<String>(
+            isExpanded: true,
+            isDense: true,
+            dropdownColor: kCard,
+            underline: const SizedBox.shrink(),
+            value: value.isEmpty || !kLangs.containsKey(value) ? '' : value,
+            style: const TextStyle(color: kTeal, fontSize: 17, fontWeight: FontWeight.w700),
+            items: [
+              const DropdownMenuItem(value: '', child: Text('Off', style: TextStyle(color: Colors.white54))),
+              for (final e in kLangs.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+            ],
+            onChanged: (v) => f(v ?? ''),
+          ),
+        ),
+      ]);
 
   @override
   Widget build(BuildContext context) {
@@ -259,30 +281,8 @@ class _NotesScreenState extends State<NotesScreen> {
                     const SizedBox(width: 8),
                     const Expanded(child: Text('Written as spoken, in any language', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
                   ]),
-                  Row(children: [
-                    const Text('Extra notes in', style: TextStyle(color: Colors.white70)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButton<String>(
-                        isExpanded: true,
-                        isDense: true,
-                        dropdownColor: kCard,
-                        underline: const SizedBox.shrink(),
-                        value: kLangs.containsKey(_nl) ? _nl : 'hi-IN',
-                        style: const TextStyle(color: kTeal, fontSize: 17, fontWeight: FontWeight.w700),
-                        items: [for (final e in kLangs.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
-                        onChanged: _pickLang,
-                      ),
-                    ),
-                  ]),
-                  _toggle('Also in $_nlName letters', 'Same words, written in $_nlName script', _letters, (v) {
-                    _set(() => _letters = v);
-                    if (v) unawaited(_catchUp(letters: true));
-                  }),
-                  _toggle('Also translate to $_nlName', 'The meaning of the whole class', _meaning, (v) {
-                    _set(() => _meaning = v);
-                    if (v) unawaited(_catchUp(letters: false));
-                  }),
+                  _picker('2nd copy, written in', _l2, (v) => _pick(true, v)),
+                  _picker('Translation in', _l3, (v) => _pick(false, v)),
                 ]),
               ),
               const SizedBox(height: 8),
