@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 
 import 'api.dart';
 import 'personal_style.dart';
+import 'screen_saved.dart';
+import 'store.dart';
 import 'widgets.dart';
 
 const _native = MethodChannel('tilda/native');
@@ -38,6 +40,7 @@ class _NotesScreenState extends State<NotesScreen> {
   bool _rotating = false;
   double _lvl = 0;
   bool _summarising = false;
+  String _id = Store.newId(); // this note's place in the saved list
 
   String get _l2 => widget.style.copyLang; // second copy ('' = off)
   String get _l3 => widget.style.meaningLang; // translation ('' = off)
@@ -96,6 +99,10 @@ class _NotesScreenState extends State<NotesScreen> {
         return;
       }
       await _service(true); // after the microphone is allowed: Android refuses a mic service before that
+    }
+    if (_spoken.isNotEmpty) {
+      _id = Store.newId();
+      _spoken = _lettersText = _meaningText = '';
     }
     _lastLoud = DateTime.now();
     _cut = Timer.periodic(const Duration(seconds: 2), (_) => _slice());
@@ -160,7 +167,8 @@ class _NotesScreenState extends State<NotesScreen> {
           if (lang != 'unknown') _src = lang;
           if (text.isEmpty) continue;
           _set(() => _spoken = _spoken.isEmpty ? text : '$_spoken $text');
-          unawaited(_extras(text));
+          _keep();
+          unawaited(_extras(text).then((_) => _keep()));
         } catch (_) {
           _set(() => _status = 'Waiting for the network. Your recording is kept.');
           if (_waiting.length > 40) _waiting.removeAt(0);
@@ -170,6 +178,19 @@ class _NotesScreenState extends State<NotesScreen> {
     } finally {
       _working = false;
     }
+  }
+
+  /// Saved after every new sentence, so leaving the screen never loses anything.
+  void _keep() {
+    if (_spoken.trim().isEmpty) return;
+    final first = _spoken.trim().split(RegExp(r'\s+')).take(7).join(' ');
+    unawaited(Store.put(SavedItem(
+      id: _id,
+      kind: 'note',
+      title: first,
+      lang: _src,
+      parts: {'spoken': _spoken, 'letters': _lettersText, 'meaning': _meaningText, 'summary': _summary},
+    )));
   }
 
   Future<void> _extras(String text) async {
@@ -238,15 +259,32 @@ class _NotesScreenState extends State<NotesScreen> {
       });
       return;
     }
+    await _makeSummary();
+  }
+
+  Future<void> _makeSummary() async {
+    _set(() {
+      _summarising = true;
+      _status = 'Making your notes...';
+    });
     try {
-      final s = await Api.summary(_spoken, _l3.isNotEmpty ? _l3 : (_src == 'auto' ? 'en-IN' : _src));
+      String? s;
+      for (var i = 0; i < 3 && s == null; i++) {
+        try {
+          s = await Api.summary(_spoken, _l3.isNotEmpty ? _l3 : (_src == 'auto' ? 'en-IN' : _src));
+        } catch (_) {
+          await Future<void>.delayed(const Duration(seconds: 3));
+        }
+      }
+      if (s == null || s.trim().isEmpty) throw Exception('no summary');
       _set(() {
-        _summary = s;
+        _summary = s!;
         _tab = 3;
-        _status = 'Your notes are ready.';
+        _status = 'Your notes are ready and saved.';
       });
+      _keep();
     } catch (_) {
-      _set(() => _status = 'Could not make the summary just now. Your full notes are saved below.');
+      _set(() => _status = 'Could not make the summary just now. Your full notes are saved. Tap Make summary to try again.');
     } finally {
       _set(() => _summarising = false);
     }
@@ -302,7 +340,7 @@ class _NotesScreenState extends State<NotesScreen> {
     if (!tabs.any((t) => t.$1 == _tab)) _tab = 0;
     return Scaffold(
       backgroundColor: kNavy,
-      appBar: AppBar(backgroundColor: kNavy, foregroundColor: Colors.white, elevation: 0, title: const Text('Take notes')),
+      appBar: AppBar(backgroundColor: kNavy, foregroundColor: Colors.white, elevation: 0, title: const Text('Take notes'), actions: [IconButton(icon: const Icon(Icons.folder_open), tooltip: 'Saved', onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())))]),
       body: GlowFrame(
         on: _on,
         quiet: _quiet,
@@ -345,6 +383,8 @@ class _NotesScreenState extends State<NotesScreen> {
               const SizedBox(height: 8),
               Text(_status, textAlign: TextAlign.center, style: TextStyle(color: _quiet ? Colors.amberAccent : Colors.white70)),
               const SizedBox(height: 8),
+              if (!_on && !_summarising && _spoken.trim().length >= 20 && _summary.isEmpty)
+                TextButton.icon(onPressed: _makeSummary, icon: const Icon(Icons.auto_awesome), label: const Text('Make summary')),
               if (_on)
                 OutlinedButton.icon(
                   onPressed: _toBackground,

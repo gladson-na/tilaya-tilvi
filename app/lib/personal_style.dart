@@ -16,6 +16,9 @@ class PersonalStyle {
   String copyLang = ''; // Notes: second copy of what was said, in this language's script ('' = off)
   String meaningLang = ''; // Notes: translation into this language ('' = off)
   String notesLang = 'hi-IN'; // the language notes are also written or translated into
+  final Set<String> callWords = {'hey'}; // how this person likes to call Tilda: hey, ae, oye, o, arre, suno, ok
+  final Set<String> callHeard = {}; // how the phone's speech engine actually wrote their calls (learned in practice)
+  bool callDone = false; // the call-word choice and practice has been done or skipped
   bool firstDone = false; // the first successful dictation has happened
   double trainedSeconds = 0; // reviewed speech collected so far
   File? _file;
@@ -48,6 +51,17 @@ class PersonalStyle {
           ..addAll((j['myLangs'] as List).cast<String>());
       }
       firstDone = j['firstDone'] == true;
+      callDone = j['callDone'] == true;
+      if (j['callWords'] is List) {
+        callWords
+          ..clear()
+          ..addAll((j['callWords'] as List).cast<String>());
+      }
+      if (j['callHeard'] is List) {
+        callHeard
+          ..clear()
+          ..addAll((j['callHeard'] as List).cast<String>());
+      }
       setupDone = j['setupDone'] == true;
       if (j['notesLang'] is String) notesLang = j['notesLang'] as String;
       if (j['copyLang'] is String) copyLang = j['copyLang'] as String;
@@ -66,6 +80,9 @@ class PersonalStyle {
           'keepAudio': keepAudio,
           'myLangs': myLangs.toList(),
           'firstDone': firstDone,
+          'callDone': callDone,
+          'callWords': callWords.toList(),
+          'callHeard': callHeard.toList(),
           'setupDone': setupDone,
           'notesLang': notesLang,
           'copyLang': copyLang,

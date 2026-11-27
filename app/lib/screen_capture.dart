@@ -2,70 +2,126 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:image_picker/image_picker.dart';
 
 import 'api.dart';
 import 'personal_style.dart';
+import 'screen_saved.dart';
+import 'store.dart';
 import 'widgets.dart';
 
-/// Point the phone at a sign, a medicine strip or a bill: Tilda reads it, translates it and says it out loud.
+/// A live camera inside Tilda. Point it at a sign, a medicine strip or a bill, tap the big button,
+/// and Tilda reads the words, translates them into the language you pick, and says them out loud.
 class CaptureScreen extends StatefulWidget {
   final PersonalStyle style;
-  final bool autoStart; // opened by voice ("read this"): the camera opens at once
+  final bool autoStart; // opened by voice; the camera is live either way
   const CaptureScreen({super.key, required this.style, this.autoStart = false});
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
 }
 
-class _CaptureScreenState extends State<CaptureScreen> {
-  static const _names = {
-    'en-IN': 'English', 'hi-IN': 'हिन्दी', 'od-IN': 'ଓଡ଼ିଆ', 'bn-IN': 'বাংলা', 'te-IN': 'తెలుగు', 'ta-IN': 'தமிழ்',
-    'kn-IN': 'ಕನ್ನಡ', 'ml-IN': 'മലയാളം', 'mr-IN': 'मराठी', 'gu-IN': 'ગુજરાતી', 'pa-IN': 'ਪੰਜਾਬੀ',
-  };
-
+class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserver {
   final _player = AudioPlayer();
   final _tts = FlutterTts();
+  CameraController? _cam;
+  String _camError = '';
   OrbState _orb = OrbState.idle;
   String _lang = 'en-IN';
   String _text = '', _original = '', _error = '';
   Uint8List? _photo;
   bool _busy = false;
+  bool _flash = false;
 
   @override
   void initState() {
     super.initState();
-    final mine = widget.style.myLangs.where(_names.containsKey).toList();
+    WidgetsBinding.instance.addObserver(this);
+    final mine = widget.style.myLangs.where(kLangs.containsKey).toList();
     _lang = mine.isNotEmpty ? mine.first : 'en-IN';
-    if (widget.autoStart) WidgetsBinding.instance.addPostFrameCallback((_) => _take());
+    _openCamera();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _cam?.dispose();
     _player.dispose();
     _tts.stop();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState s) {
+    if (s == AppLifecycleState.inactive) {
+      _cam?.dispose();
+      _cam = null;
+    } else if (s == AppLifecycleState.resumed && _cam == null && _photo == null) {
+      _openCamera();
+    }
   }
 
   void _set(VoidCallback f) {
     if (mounted) setState(f);
   }
 
-  Future<void> _take() async {
-    if (_busy) return;
+  Future<void> _openCamera() async {
+    try {
+      final all = await availableCameras();
+      if (all.isEmpty) {
+        _set(() => _camError = 'This phone has no camera Tilda can use.');
+        return;
+      }
+      final back = all.firstWhere((c) => c.lensDirection == CameraLensDirection.back, orElse: () => all.first);
+      final c = CameraController(back, ResolutionPreset.high, enableAudio: false, imageFormatGroup: ImageFormatGroup.jpeg);
+      await c.initialize();
+      try {
+        await c.setFocusMode(FocusMode.auto);
+      } catch (_) {}
+      if (!mounted) {
+        await c.dispose();
+        return;
+      }
+      setState(() {
+        _cam = c;
+        _camError = '';
+      });
+    } on CameraException catch (e) {
+      _set(() => _camError = e.code.contains('Denied') || e.code.contains('Access')
+          ? 'Please allow the camera for Tilda: Settings, Apps, Tilda, Permissions.'
+          : 'The camera could not start. Please close other camera apps and try again.');
+    } catch (_) {
+      _set(() => _camError = 'The camera could not start. Please try again.');
+    }
+  }
+
+  Future<void> _toggleFlash() async {
+    final c = _cam;
+    if (c == null) return;
+    try {
+      await c.setFlashMode(_flash ? FlashMode.off : FlashMode.torch);
+      _set(() => _flash = !_flash);
+    } catch (_) {}
+  }
+
+  Future<void> _shoot() async {
+    final c = _cam;
+    if (_busy || c == null || !c.value.isInitialized) return;
     _busy = true;
     try {
       await _player.stop();
       await _tts.stop();
-      final x = await ImagePicker().pickImage(source: ImageSource.camera, maxWidth: 1400, imageQuality: 72);
-      if (x == null) {
-        _set(() => _orb = OrbState.idle);
-        return;
-      }
+      final x = await c.takePicture();
       final bytes = await x.readAsBytes();
+      if (_flash) {
+        try {
+          await c.setFlashMode(FlashMode.off);
+        } catch (_) {}
+        _flash = false;
+      }
       _set(() {
         _photo = bytes;
         _text = '';
@@ -78,16 +134,18 @@ class _CaptureScreenState extends State<CaptureScreen> {
         j = await Api.readPhoto(base64Encode(bytes), _lang);
       } catch (_) {
         // No internet or the server is busy: read the words on the phone itself (Hindi, Marathi and English).
-        await _readOffline(x.path);
+        await _readOffline(x.path, bytes);
         return;
       }
       final t = (j['text'] ?? '') as String;
+      final o = (j['original'] ?? '') as String;
       _set(() {
         _text = t;
-        _original = (j['original'] ?? '') as String;
+        _original = o;
         _error = t.isEmpty ? 'I could not find any words in that photo. Please try again, closer and in good light.' : '';
         _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
       });
+      if (t.isNotEmpty) await _keep(bytes, t, o);
       await _say(t.isEmpty ? _error : t);
     } catch (_) {
       _set(() => _error = 'I could not read that just now. Please check the internet and try again.');
@@ -97,12 +155,21 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
   }
 
-  Future<void> _readOffline(String path) async {
+  Future<void> _keep(Uint8List bytes, String text, String original) async {
+    try {
+      final id = Store.newId();
+      final name = await Store.savePhoto(id, bytes);
+      final first = text.trim().split(RegExp(r'\s+')).take(7).join(' ');
+      await Store.put(SavedItem(id: id, kind: 'photo', title: first, lang: _lang, photo: name, parts: {'text': text, 'original': original}));
+    } catch (_) {}
+  }
+
+  Future<void> _readOffline(String path, Uint8List bytes) async {
     final rec = TextRecognizer(script: TextRecognitionScript.devanagiri);
     try {
       final r = await rec.processImage(InputImage.fromFilePath(path));
       final t = r.text.trim();
-      final deva = RegExp(r'[\u0900-\u097F]').hasMatch(t);
+      final deva = RegExp(r'[ऀ-ॿ]').hasMatch(t);
       _set(() {
         _text = t;
         _original = '';
@@ -112,11 +179,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
       });
       if (t.isNotEmpty) {
+        await _keep(bytes, t, '');
         await _tts.setLanguage(deva ? 'hi-IN' : 'en-IN');
         await _tts.speak(t.length > 700 ? t.substring(0, 700) : t);
       }
     } finally {
       await rec.close();
+      _busy = false;
+      _set(() => _orb = OrbState.idle);
     }
   }
 
@@ -143,80 +213,120 @@ class _CaptureScreenState extends State<CaptureScreen> {
     _set(() => _orb = OrbState.idle);
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: kNavy,
-        appBar: AppBar(
-          backgroundColor: kNavy,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          title: const Text('Capture', style: TextStyle(fontWeight: FontWeight.w700)),
-        ),
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-            child: Column(children: [
-              SizedBox(
-                height: 46,
-                child: ListView(scrollDirection: Axis.horizontal, children: [
-                  for (final l in widget.style.myLangs.where(_names.containsKey))
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(_names[l]!, style: const TextStyle(fontSize: 16)),
-                        selected: _lang == l,
-                        onSelected: (_) => _set(() => _lang = l),
-                      ),
-                    ),
-                ]),
+  void _again() {
+    _player.stop();
+    _tts.stop();
+    _set(() {
+      _photo = null;
+      _text = _original = _error = '';
+      _orb = OrbState.idle;
+    });
+    if (_cam == null) _openCamera();
+  }
+
+  Widget _langRow() => SizedBox(
+        height: 44,
+        child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
+          for (final e in kLangs.entries)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(e.value, style: TextStyle(fontSize: 16, color: _lang == e.key ? Colors.black : Colors.white)),
+                selected: _lang == e.key,
+                selectedColor: kTeal,
+                backgroundColor: Colors.black54,
+                side: BorderSide.none,
+                showCheckmark: false,
+                onSelected: (_) => _set(() => _lang = e.key),
               ),
-              const SizedBox(height: 6),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(children: [
-                    if (_photo != null)
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: Image.memory(_photo!, height: 170, width: double.infinity, fit: BoxFit.cover),
-                      ),
-                    const SizedBox(height: 10),
-                    if (_orb == OrbState.reading) const Padding(padding: EdgeInsets.all(18), child: CircularProgressIndicator()),
-                    if (_text.isNotEmpty)
-                      SelectableText(_text, style: const TextStyle(color: Colors.white, fontSize: 28, height: 1.35, fontWeight: FontWeight.w600)),
-                    if (_error.isNotEmpty)
-                      Text(_error, style: const TextStyle(color: Colors.white70, fontSize: 20, height: 1.35)),
-                    if (_original.isNotEmpty && _text.isNotEmpty) ...[
-                      const SizedBox(height: 14),
-                      Text(_original, style: const TextStyle(color: Colors.white38, fontSize: 15)),
-                    ],
-                    if (_photo == null && _error.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 60),
-                        child: Icon(Icons.photo_camera, color: Colors.white24, size: 120),
-                      ),
-                  ]),
-                ),
-              ),
-              Row(children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _busy ? null : _take,
-                    icon: const Icon(Icons.photo_camera, size: 30),
-                    label: Text(_photo == null ? 'Take photo' : 'Again', style: const TextStyle(fontSize: 20)),
-                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64), backgroundColor: kBlue),
-                  ),
-                ),
-                if (_text.isNotEmpty) ...[
-                  const SizedBox(width: 12),
-                  IconButton.filled(
-                    onPressed: _listenAgain,
-                    icon: const Icon(Icons.volume_up, size: 30),
-                    style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: kTeal, foregroundColor: Colors.black),
-                  ),
-                ],
-              ]),
+            ),
+        ]),
+      );
+
+  Widget _live() {
+    final c = _cam;
+    if (_camError.isNotEmpty) {
+      return Center(child: Padding(padding: const EdgeInsets.all(32), child: Text(_camError, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 20, height: 1.4))));
+    }
+    if (c == null || !c.value.isInitialized) return const Center(child: CircularProgressIndicator());
+    return Center(child: CameraPreview(c));
+  }
+
+  Widget _result() => Column(children: [
+        if (_photo != null)
+          SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover)),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (_orb == OrbState.reading) const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
+              if (_text.isNotEmpty) SelectableText(_text, style: const TextStyle(color: Colors.white, fontSize: 28, height: 1.35, fontWeight: FontWeight.w600)),
+              if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Colors.white70, fontSize: 20, height: 1.35)),
+              if (_original.isNotEmpty && _text.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Text(_original, style: const TextStyle(color: Colors.white38, fontSize: 15)),
+              ],
             ]),
           ),
         ),
-      );
+      ]);
+
+  @override
+  Widget build(BuildContext context) {
+    final showing = _photo != null;
+    return Scaffold(
+      backgroundColor: kNavy,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text('Capture', style: TextStyle(fontWeight: FontWeight.w700)),
+        actions: [
+          if (!showing && _cam != null) IconButton(icon: Icon(_flash ? Icons.flash_on : Icons.flash_off), onPressed: _toggleFlash),
+          IconButton(icon: const Icon(Icons.folder_open), onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen()))),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(children: [
+          const SizedBox(height: 4),
+          _langRow(),
+          const SizedBox(height: 6),
+          Expanded(child: showing ? _result() : ClipRRect(borderRadius: BorderRadius.circular(20), child: _live())),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+            child: showing
+                ? Row(children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _busy ? null : _again,
+                        icon: const Icon(Icons.photo_camera, size: 28),
+                        label: const Text('New photo', style: TextStyle(fontSize: 20)),
+                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64), backgroundColor: kBlue),
+                      ),
+                    ),
+                    if (_text.isNotEmpty) ...[
+                      const SizedBox(width: 12),
+                      IconButton.filled(
+                        onPressed: _listenAgain,
+                        icon: const Icon(Icons.volume_up, size: 30),
+                        style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: kTeal, foregroundColor: Colors.black),
+                      ),
+                    ],
+                  ])
+                : GestureDetector(
+                    onTap: _shoot,
+                    child: Container(
+                      width: 78,
+                      height: 78,
+                      decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 4)),
+                      padding: const EdgeInsets.all(6),
+                      child: const DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white)),
+                    ),
+                  ),
+          ),
+        ]),
+      ),
+    );
+  }
 }

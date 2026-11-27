@@ -16,6 +16,7 @@ import 'live_stt.dart';
 import 'offline_asr.dart';
 import 'personal_style.dart';
 import 'api.dart';
+import 'callwords.dart';
 import 'screen_capture.dart';
 import 'screen_home.dart';
 import 'screen_notes.dart';
@@ -23,7 +24,18 @@ import 'screen_talk.dart';
 import 'screen_translate.dart';
 import 'widgets.dart';
 
-void main() => runApp(const TildaApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Draw under the status bar and the camera hole, so the glow fills the whole screen.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    systemNavigationBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
+  runApp(const TildaApp());
+}
 
 /// Entry point for the floating bubble that sits over other apps (Android only).
 /// It only draws the button; the main app records and transcribes.
@@ -265,6 +277,9 @@ class _HomePageState extends State<HomePage> {
     }
     if (!_style.setupDone) {
       return SetupScreen(style: _style, onDone: () => setState(() {}));
+    }
+    if (!_style.callDone) {
+      return CallWordsScreen(style: _style, onDone: () => setState(() {}));
     }
     return HomeScreen(
       onTalk: () => _open(TalkScreen(style: _style)),
@@ -946,6 +961,19 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () {
                     Navigator.pop(ctx);
                     _style.setupDone = false;
+                    setState(() {});
+                  },
+                  child: const Text('Change'),
+                ),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('How I call Tilda'),
+                subtitle: Text(_style.callWords.map(CallWords.label).join(', ')),
+                trailing: TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _style.callDone = false;
                     setState(() {});
                   },
                   child: const Text('Change'),

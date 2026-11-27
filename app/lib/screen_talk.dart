@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'api.dart';
 import 'personal_style.dart';
+import 'callwords.dart';
 import 'screen_capture.dart';
 import 'widgets.dart';
 
@@ -219,7 +220,8 @@ class _TalkScreenState extends State<TalkScreen> {
     await _ask(t);
   }
 
-  Future<void> _ask(String said) async {
+  Future<void> _ask(String heard) async {
+    final said = CallWords.strip(heard, widget.style);
     _history.add({'role': 'user', 'content': said});
     if (_fbKind != null && !_fbSent && said.length > _fbText.length) _fbText = said;
     _set(() {
