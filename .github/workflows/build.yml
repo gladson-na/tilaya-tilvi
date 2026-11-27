@@ -82,7 +82,7 @@ jobs:
       - name: Which library needs Android 7
         run: |
           R=app/build/app/outputs/logs/manifest-merger-release-report.txt; ls "$R"
-          grep -nE -A3 "uses-sdk" "$R" | grep -E "minSdkVersion|MERGED|ADDED|uses-sdk" | head -60
+          sed -n '280,330p' "$R"
       - uses: actions/upload-artifact@v4
         with: { name: tilda-android-apk, path: app/build/app/outputs/flutter-apk/app-release.apk }
 
