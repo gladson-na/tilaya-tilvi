@@ -202,12 +202,13 @@ def read_image(image_b64: str, lang_name: str) -> dict:
     prompt = (f"Read all the text you can see in this photo (a sign, a medicine strip, a bill, a board, a page). "
               f"Reply with JSON only: {{\"original\": the text exactly as written, \"translation\": that text translated into {lang_name}, "
               "written the way a person would say it out loud, short and clear}. If a medicine or label has numbers, keep them exact. "
+              "Put the headline or title first, on its own line. Separate each paragraph with a blank line, and keep the same paragraphs in the translation. "
               "If there is no readable text, use empty strings.")
     msgs = [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}}]}]
     try:
-        out = groq.chat(msgs, groq.VISION_MODELS, max_tokens=900, temperature=0.1, json_mode=True, timeout=45)
+        out = groq.chat(msgs, groq.VISION_MODELS, max_tokens=3500, temperature=0.1, json_mode=True, timeout=60)
         j = _first_json(out)
     except (groq.GroqError, ToolError) as e:
         raise ToolError("could not read the photo just now (" + str(e) + ")")

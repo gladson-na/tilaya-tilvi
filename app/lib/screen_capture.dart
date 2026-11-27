@@ -34,6 +34,9 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   String _text = '', _original = '', _error = '';
   Uint8List? _photo;
   bool _busy = false;
+  List<String> _paras = []; // the text split into paragraphs, for choosing what to hear
+  int _sel = -1;
+  int _rg = 0; // bumped to stop a long read-out
   bool _flash = false;
 
   @override
@@ -125,6 +128,8 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       }
       _set(() {
         _photo = bytes;
+        _paras = [];
+        _sel = -1;
         _text = '';
         _original = '';
         _error = '';
@@ -149,11 +154,14 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       _set(() {
         _text = t;
         _original = o;
+        _paras = _split(t);
+        _sel = -1;
         _error = t.isEmpty ? 'I could not find any words. Move the phone closer, hold it steady, and use more light.' : '';
         _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
       });
       if (t.isNotEmpty) await _keep(bytes, t, o);
-      await _say(t.isEmpty ? _error : t);
+      // a long page (a newspaper, a leaflet): do not read it all at once, let the person choose what to hear
+      if (_paras.length < 3) await _say(t.isEmpty ? _error : t);
     } catch (_) {
       _set(() => _error = 'I could not read that just now. Please check the internet and try again.');
     } finally {
@@ -223,17 +231,66 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     } catch (_) {}
   }
 
+  List<String> _split(String t) => t.split(RegExp(r'\n\s*\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+
+  /// Reads the chosen pieces one after another, and stops if the person chooses something else.
+  Future<void> _sayParts(List<String> parts, {int? mark}) async {
+    final my = ++_rg;
+    await _player.stop();
+    await _tts.stop();
+    for (var i = 0; i < parts.length; i++) {
+      if (my != _rg || !mounted) return;
+      _set(() {
+        _orb = OrbState.speaking;
+        if (mark != null) _sel = mark + i;
+      });
+      await _say(parts[i]);
+    }
+    if (my == _rg) _set(() => _orb = OrbState.idle);
+  }
+
+  Future<void> _summarise() async {
+    final my = ++_rg;
+    await _player.stop();
+    await _tts.stop();
+    _set(() {
+      _orb = OrbState.reading;
+      _sel = -1;
+    });
+    String s = '';
+    try {
+      s = await Api.summary(_text, _lang);
+    } catch (_) {}
+    if (my != _rg || !mounted) return;
+    if (s.trim().isEmpty) {
+      _set(() {
+        _orb = OrbState.idle;
+        _error = 'I could not make a short version just now. Please try again.';
+      });
+      return;
+    }
+    _set(() => _error = '');
+    await _sayParts([s.trim()]);
+  }
+
   Future<void> _listenAgain() async {
     if (_text.isEmpty) return;
+    if (_paras.length >= 3) {
+      await _sayParts(_paras, mark: 0);
+      return;
+    }
     _set(() => _orb = OrbState.speaking);
     await _say(_text);
     _set(() => _orb = OrbState.idle);
   }
 
   void _again() {
+    _rg++;
     _player.stop();
     _tts.stop();
     _set(() {
+      _paras = [];
+      _sel = -1;
       _photo = null;
       _text = _original = _error = '';
       _orb = OrbState.idle;
@@ -290,7 +347,49 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (_orb == OrbState.reading) const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
-              if (_text.isNotEmpty) SelectableText(_text, style: const TextStyle(color: kInk, fontSize: 28, height: 1.35, fontWeight: FontWeight.w700)),
+              if (_text.isNotEmpty && _paras.length < 3) SelectableText(_text, style: const TextStyle(color: kInk, fontSize: 28, height: 1.35, fontWeight: FontWeight.w700)),
+              if (_paras.length >= 3) ...[
+                const Text('This is a long page. What do you want to hear?', style: TextStyle(color: kInk, fontSize: 22, fontWeight: FontWeight.w800, height: 1.25)),
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  ActionChip(label: const Text('Read it all', style: TextStyle(fontSize: 17)), onPressed: () => _sayParts(_paras, mark: 0)),
+                  ActionChip(label: const Text('Headline', style: TextStyle(fontSize: 17)), onPressed: () => _sayParts([_paras.first], mark: 0)),
+                  ActionChip(label: const Text('Short summary', style: TextStyle(fontSize: 17)), onPressed: _summarise),
+                  ActionChip(avatar: const Icon(Icons.stop, size: 18), label: const Text('Stop', style: TextStyle(fontSize: 17)), onPressed: () {
+                    _rg++;
+                    _player.stop();
+                    _tts.stop();
+                    _set(() => _orb = OrbState.idle);
+                  }),
+                ]),
+                const SizedBox(height: 12),
+                const Text('Or tap a paragraph:', style: TextStyle(color: kSub, fontSize: 15)),
+                const SizedBox(height: 6),
+                for (var i = 0; i < _paras.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Semantics(
+                      button: true,
+                      label: 'Read paragraph ${i + 1}',
+                      child: Material(
+                        color: i == _sel ? kMint : Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: i == _sel ? kPrimary : kLine)),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () => _sayParts([_paras[i]], mark: i),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text('${i + 1}', style: const TextStyle(color: kPrimary, fontSize: 20, fontWeight: FontWeight.w800)),
+                              const SizedBox(width: 12),
+                              Expanded(child: Text(_paras[i], style: const TextStyle(color: kInk, fontSize: 19, height: 1.35))),
+                            ]),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
               if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: kSub, fontSize: 19, height: 1.35)),
               if (_original.isNotEmpty && _text.isNotEmpty) ...[
                 const SizedBox(height: 14),
