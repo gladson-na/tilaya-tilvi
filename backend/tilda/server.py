@@ -310,6 +310,7 @@ def do_transcribe():
                     lang = mine[0]
                     res, main_log = transcribe(wav, lang, main_chain, timeout=8, hints=hints)
                     log += main_log
+                res.text = tools.clean_tail(res.text)
                 answer = dict(text=res.text, engine=res.engine, language=lang,
                               greeting_found=bool(greeting_langs), heard_first=said, log=log,
                               action=interpret(res.text))

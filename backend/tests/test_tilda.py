@@ -559,3 +559,24 @@ def test_read_image_needs_key_and_parses_answer(monkeypatch):
             return {"choices": [{"message": {"content": '{"original": "Exit", "translation": "बाहर निकलें"}'}}]}
     monkeypatch.setattr(tools.requests, "post", lambda *a, **k: R())
     assert tools.read_image("QUJD", "Hindi") == {"original": "Exit", "text": "बाहर निकलें"}
+
+
+def test_clean_tail_drops_invented_hello_only_after_a_full_sentence():
+    long = "Active gives you a huge boost on dating apps, at least where your initial success is concerned."
+    assert tools.clean_tail(long + " Hello") == long
+    assert tools.clean_tail("Thank you for the help with the shop total of today.") != ""
+    assert tools.clean_tail("hello") == "hello"
+    assert tools.clean_tail("I said hello") == "I said hello"
+    assert tools.clean_tail("सक्रिय रहने से आपको बहुत बढ़ावा मिलता है और सफलता मिलती है। नमस्ते").endswith("मिलती है।")
+
+
+def test_live_questions_get_web_answer(monkeypatch):
+    monkeypatch.setattr(tools, "web_answer", lambda q, n="English": "Petrol is about 100 rupees a litre in Bhubaneswar today.")
+    out = tools.context_for([{"role": "user", "content": "what is the petrol price today"}])
+    assert out["intent"] == "live" and "Petrol" in out["extra"]
+
+
+def test_web_answer_needs_key(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(tools.ToolError):
+        tools.web_answer("news today")

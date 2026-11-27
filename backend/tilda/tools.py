@@ -40,6 +40,13 @@ WMO = {0: "clear sky", 1: "mostly clear", 2: "partly cloudy", 3: "overcast", 45:
        95: "a thunderstorm", 96: "a thunderstorm with hail", 99: "a thunderstorm with hail"}
 
 
+LIVE_RE = re.compile(
+    r"\b(today|tonight|tomorrow|latest|news|price|rate of|cost of|score|current|currently|right now|who won|who is the|when is|"
+    r"open now|train|flight|bus timing|schedule|result|stock|petrol|diesel|gold|exchange rate|trending|how long|how much time|travel time)\b|"
+    r"आज|कल|ताज़ा|ताजा|खबर|समाचार|भाव|दाम|कीमत|स्कोर|नतीजा|रिज़ल्ट|ट्रेन|फ्लाइट|कितना समय|कितनी देर|कब है|ଆଜି|ଖବର|ଦାମ", re.I)
+WEB_MODELS = ("groq/compound-mini", "groq/compound")
+
+
 class ToolError(Exception):
     pass
 
@@ -167,6 +174,44 @@ CAMERA_RE = re.compile(
 VISION_MODELS = ("meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct")
 
 
+def web_answer(question: str, lang_name: str = "English") -> str:
+    """A short, checked answer from the live web (Groq's search-enabled model). Raises ToolError when it cannot."""
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise ToolError("key not set: add GROQ_API_KEY for live answers")
+    last = "no search model answered"
+    for model in WEB_MODELS:
+        try:
+            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"}, timeout=30, json={
+                "model": model, "temperature": 0.1, "max_tokens": 350, "messages": [
+                    {"role": "system", "content": "Answer from a web search in at most three short sentences, plain words, no links, no markdown. "
+                     "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "."},
+                    {"role": "user", "content": question}]})
+            if r.status_code == 200:
+                out = (r.json()["choices"][0]["message"]["content"] or "").strip()
+                if out:
+                    return out
+            last = f"{model}: {r.status_code}"
+        except (requests.RequestException, KeyError, IndexError, ValueError) as e:
+            last = f"{model}: {type(e).__name__}"
+    raise ToolError("web search failed (" + last + ")")
+
+
+_TAIL_RE = re.compile(r"(?:(?<=[.!?।॥])|\s)\s*(?:hello|hi|hey|bye|thank you|thanks|thanks for watching|नमस्ते|हेलो|धन्यवाद|शुक्रिया)\s*[.!?।]*\s*$", re.I)
+
+
+def clean_tail(text: str) -> str:
+    """Speech engines invent a closing 'Hello' or 'Thank you' on trailing silence. Drops one such word after a full sentence."""
+    t = (text or "").strip()
+    m = _TAIL_RE.search(t)
+    if not m:
+        return t
+    head = t[:m.start()].rstrip()
+    if len(head.split()) >= 6 and head[-1:] in ".!?।॥":
+        return head
+    return t
+
+
 def read_image(image_b64: str, lang_name: str) -> dict:
     """Reads the text in a photo and translates it. Returns {"original": ..., "text": translation in lang_name}."""
     key = os.environ.get("GROQ_API_KEY")
@@ -220,6 +265,10 @@ def context_for(messages, lat=None, lon=None) -> dict:
             if lat is None or lon is None:
                 return {"intent": "weather", "extra": "LIVE DATA: the user's location is not shared, so you cannot check the weather. Say that, and ask them to allow location for Tilda."}
             return {"intent": "weather", "extra": "LIVE DATA: " + weather(lat, lon)}
+        if LIVE_RE.search(last) and not CALC_RE.search(last):
+            from .translate import NAMES  # noqa: F401
+            return {"intent": "live", "extra": "LIVE DATA (from the web): " + web_answer(last) +
+                    " Say this in your own words, briefly, and say it is from the web."}
         if CALC_RE.search(last) and (len(re.findall(r"\d+", last)) >= 2 or len(NUMWORDS_RE.findall(last)) >= 2):
             return {"intent": "calc", "extra": "LIVE DATA: " + calculate(last)}
     except (ToolError, requests.RequestException) as e:
