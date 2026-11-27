@@ -79,8 +79,10 @@ jobs:
         working-directory: app
       - run: flutter build apk --release
         working-directory: app
-      - name: Show the minimum Android version that was built in
-        run: grep -nE "minSdk" app/android/app/build.gradle* || true
+      - name: Which library needs Android 7
+        run: |
+          R=$(find app/build -name 'manifest-merger-release-report.txt' | head -1); echo "$R"
+          grep -nE "uses-sdk|minSdkVersion" "$R" | head -40
       - uses: actions/upload-artifact@v4
         with: { name: tilda-android-apk, path: app/build/app/outputs/flutter-apk/app-release.apk }
 
