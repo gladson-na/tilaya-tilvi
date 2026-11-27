@@ -17,7 +17,9 @@ pre{background:#f3f3f3;padding:12px;border-radius:8px;white-space:pre-wrap;font-
 <button id="rec">Tap or hold to record</button>
 <div class="big" id="text"></div>
 <pre id="log">Waiting.</pre>
+<div id="wake" style="display:none;background:#FCE6DC;color:#13211D;padding:10px 14px;margin:8px;border-radius:12px;font:16px sans-serif">Waking up, this takes about 30 seconds the first time. Please wait.</div>
 <script>
+const _w=document.getElementById('wake');const _t=setTimeout(()=>{_w.style.display='block'},2500);fetch('health').then(()=>{clearTimeout(_t);_w.style.display='none'}).catch(()=>{});
 const rec=document.getElementById('rec'),logEl=document.getElementById('log'),textEl=document.getElementById('text');
 Promise.all([fetch('languages').then(r=>r.json()),fetch('beta').then(r=>r.json())]).then(([l,b])=>l.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c+(b.includes(c)?' (beta)':'');document.getElementById('lang').append(o)}));
 fetch('status').then(r=>r.json()).then(s=>{const k=document.getElementById('keynote');if(s.demo){k.style.display='block';k.textContent='Demo mode: answers are sample text. Set SARVAM_API_KEY or GROQ_API_KEY for real voice.'}else if(!s.ready){k.style.display='block';k.textContent='Key not set: add SARVAM_API_KEY or GROQ_API_KEY (see .env.example) to turn on real voice. The app itself is running.'}}).catch(()=>{});
