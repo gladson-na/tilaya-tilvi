@@ -1116,6 +1116,13 @@ class _HomePageState extends State<HomePage> {
                     childrenPadding: const EdgeInsets.only(bottom: 8),
                     title: const Text('For testing'),
                     children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Remove Notes demo limit'),
+                        subtitle: Text('Notes stops after ${Api.demoMinutes} minutes to protect the free credits. Turn this on for long recordings. It switches off again when the app restarts.'),
+                        value: Api.noLimit,
+                        onChanged: (v) => setSheet(() => Api.noLimit = v),
+                      ),
                       TextField(controller: _url, decoration: const InputDecoration(labelText: 'Server address')),
                       if (!_asr.ready)
                         Padding(

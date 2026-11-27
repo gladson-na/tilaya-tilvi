@@ -23,6 +23,10 @@ class Api {
 
   /// Slow internet: switched on by hand in Settings, or by itself when uploads take too long (2G).
   static bool saver = false;
+
+  /// Demo cap on one Notes recording (minutes). Off switch is in Settings, Advanced, and resets on every app start.
+  static const int demoMinutes = 5;
+  static bool noLimit = false;
   static bool slowSeen = false;
   static bool get slow => saver || slowSeen;
 

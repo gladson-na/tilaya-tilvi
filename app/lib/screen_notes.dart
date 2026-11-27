@@ -29,6 +29,7 @@ class _NotesScreenState extends State<NotesScreen> {
   Timer? _lvlT;
   Timer? _cut;
   bool _on = false;
+  DateTime _startedAt = DateTime.now();
   bool _quiet = false;
   int _tab = 0;
   String _spoken = '', _lettersText = '', _meaningText = '', _summary = '';
@@ -105,7 +106,19 @@ class _NotesScreenState extends State<NotesScreen> {
       _spoken = _lettersText = _meaningText = '';
     }
     _lastLoud = DateTime.now();
-    _cut = Timer.periodic(const Duration(seconds: 2), (_) => _slice());
+    _startedAt = DateTime.now();
+    _cut = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_on && !Api.noLimit && DateTime.now().difference(_startedAt).inSeconds >= Api.demoMinutes * 60) {
+        final m = ScaffoldMessenger.maybeOf(context);
+        m?.showSnackBar(SnackBar(
+          duration: const Duration(seconds: 12),
+          content: Text('Demo limit: ${Api.demoMinutes} minutes, to protect the free speech credits until 3 December. Longer recording is built and switched off for now.'),
+        ));
+        _stop();
+        return;
+      }
+      _slice();
+    });
     _set(() {
       _on = true;
       _quiet = false;
