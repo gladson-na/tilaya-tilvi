@@ -167,7 +167,8 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       final id = Store.newId();
       final name = await Store.savePhoto(id, bytes);
       final first = text.trim().split(RegExp(r'\s+')).take(7).join(' ');
-      await Store.put(SavedItem(id: id, kind: 'photo', title: first, lang: _lang, photo: name, parts: {'text': text, 'original': original}));
+      final ok = await Store.put(SavedItem(id: id, kind: 'photo', title: first, lang: _lang, photo: name, parts: {'text': text, 'original': original}));
+      if (!ok) _set(() => _error = Store.lastError ?? 'Could not save this photo.');
     } catch (_) {}
   }
 
@@ -247,10 +248,10 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
-                label: Text(e.value, style: TextStyle(fontSize: 16, color: _lang == e.key ? Colors.black : Colors.white)),
+                label: Text(e.value, style: TextStyle(fontSize: 16, color: _lang == e.key ? Colors.white : kInk)),
                 selected: _lang == e.key,
-                selectedColor: kTeal,
-                backgroundColor: Colors.black54,
+                selectedColor: kPrimary,
+                backgroundColor: kMint,
                 side: BorderSide.none,
                 showCheckmark: false,
                 onSelected: (_) => _set(() => _lang = e.key),
@@ -262,25 +263,46 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   Widget _live() {
     final c = _cam;
     if (_camError.isNotEmpty) {
-      return Center(child: Padding(padding: const EdgeInsets.all(32), child: Text(_camError, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 20, height: 1.4))));
+      return Center(child: Padding(padding: const EdgeInsets.all(32), child: Text(_camError, textAlign: TextAlign.center, style: const TextStyle(color: kSub, fontSize: 20, height: 1.4))));
     }
     if (c == null || !c.value.isInitialized) return const Center(child: CircularProgressIndicator());
-    return Center(child: CameraPreview(c));
+    return Stack(alignment: Alignment.topCenter, children: [
+      Center(child: CameraPreview(c)),
+      Positioned(
+        top: 10,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+          child: const Text('Hold steady, fill the screen with the words', style: TextStyle(color: Colors.white, fontSize: 15)),
+        ),
+      ),
+    ]);
   }
 
   Widget _result() => Column(children: [
         if (_photo != null)
-          SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+            child: ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover))),
+          ),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (_orb == OrbState.reading) const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
-              if (_text.isNotEmpty) SelectableText(_text, style: const TextStyle(color: Colors.white, fontSize: 28, height: 1.35, fontWeight: FontWeight.w600)),
-              if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Colors.white70, fontSize: 20, height: 1.35)),
+              if (_text.isNotEmpty) SelectableText(_text, style: const TextStyle(color: kInk, fontSize: 28, height: 1.35, fontWeight: FontWeight.w700)),
+              if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: kSub, fontSize: 19, height: 1.35)),
               if (_original.isNotEmpty && _text.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                Text(_original, style: const TextStyle(color: Colors.white38, fontSize: 15)),
+                Text(_original, style: const TextStyle(color: kSub, fontSize: 15)),
+              ],
+              if (_text.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(14)),
+                  child: const Text('Please double-check medicine names, doses and numbers against the original.', style: TextStyle(color: kInk, fontSize: 15, height: 1.35)),
+                ),
               ],
             ]),
           ),
@@ -291,16 +313,12 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   Widget build(BuildContext context) {
     final showing = _photo != null;
     return Scaffold(
-      backgroundColor: kNavy,
-      extendBodyBehindAppBar: true,
+      backgroundColor: kBg,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text('Capture', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text('Capture'),
         actions: [
-          if (!showing && _cam != null) IconButton(icon: Icon(_flash ? Icons.flash_on : Icons.flash_off), onPressed: _toggleFlash),
-          IconButton(icon: const Icon(Icons.folder_open), onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen()))),
+          if (!showing && _cam != null) IconButton(icon: Icon(_flash ? Icons.flash_on : Icons.flash_off), tooltip: 'Light', onPressed: _toggleFlash),
+          IconButton(icon: const Icon(Icons.bookmark_border), tooltip: 'Saved', onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen()))),
         ],
       ),
       body: SafeArea(
@@ -318,7 +336,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                         onPressed: _busy ? null : _again,
                         icon: const Icon(Icons.photo_camera, size: 28),
                         label: const Text('New photo', style: TextStyle(fontSize: 20)),
-                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64), backgroundColor: kBlue),
+                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64)),
                       ),
                     ),
                     if (_text.isNotEmpty) ...[
@@ -326,18 +344,23 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                       IconButton.filled(
                         onPressed: _listenAgain,
                         icon: const Icon(Icons.volume_up, size: 30),
-                        style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: kTeal, foregroundColor: Colors.black),
+                        tooltip: 'Listen again',
+                        style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: kMint, foregroundColor: kPrimary),
                       ),
                     ],
                   ])
-                : GestureDetector(
-                    onTap: _shoot,
-                    child: Container(
-                      width: 78,
-                      height: 78,
-                      decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 4)),
-                      padding: const EdgeInsets.all(6),
-                      child: const DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white)),
+                : Semantics(
+                    button: true,
+                    label: 'Take a photo',
+                    child: GestureDetector(
+                      onTap: _shoot,
+                      child: Container(
+                        width: 80,
+                        height: 80,
+                        decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: kPrimary, width: 4)),
+                        padding: const EdgeInsets.all(6),
+                        child: const DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: kPrimary)),
+                      ),
                     ),
                   ),
           ),

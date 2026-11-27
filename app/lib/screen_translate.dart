@@ -56,12 +56,21 @@ class _TranslateScreenState extends State<TranslateScreen> {
     if (mounted) setState(f);
   }
 
+  bool _holding = false; // the finger is still on the button
+
   Future<void> _down(bool me) async {
     if (_busy || _mic.on) return;
+    _holding = true;
     _downAt = DateTime.now().millisecondsSinceEpoch;
     final ok = await _mic.start((_) {});
     if (!ok) {
+      _holding = false;
       _set(() => _status = 'Allow the microphone.');
+      return;
+    }
+    if (!_holding) {
+      // let go before the microphone was ready: do not leave it recording
+      await _mic.stop();
       return;
     }
     _set(() {
@@ -72,6 +81,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
   }
 
   Future<void> _up(bool me) async {
+    _holding = false;
     if (!_mic.on) return;
     final held = DateTime.now().millisecondsSinceEpoch - _downAt;
     final wav = await _mic.stop();
@@ -144,9 +154,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: lit ? accent : Colors.transparent,
-          border: Border.all(color: lit ? accent : Colors.white24, width: 2),
+          border: Border.all(color: lit ? accent : kLine, width: 2),
         ),
-        child: Text(side, style: TextStyle(color: lit ? Colors.black : Colors.white38, fontWeight: FontWeight.w800, fontSize: 18)),
+        child: Text(side, style: TextStyle(color: lit ? Colors.white : kSub, fontWeight: FontWeight.w800, fontSize: 18)),
       );
 
   /// Picture of which earbud this person wears: the other person on the left, me on the right.
@@ -166,23 +176,23 @@ class _TranslateScreenState extends State<TranslateScreen> {
     final read = me ? _toMe : _toOther; // the big text this person reads
     final said = me ? _meHeard : _otherHeard;
     final rec = me ? _recMe : _recOther;
-    final accent = me ? kTeal : kOrange;
+    final accent = kPrimary;
     final body = Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(22), border: Border.all(color: accent.withOpacity(rec ? 0.9 : 0.25), width: rec ? 2.5 : 1)),
+      decoration: BoxDecoration(color: me ? kMint : kPeach, borderRadius: BorderRadius.circular(24), border: rec ? Border.all(color: kPrimary, width: 2.5) : null),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
-          Text(me ? 'You speak' : 'They speak', style: const TextStyle(color: Colors.white54)),
+          Text(me ? 'You' : 'Other person', style: const TextStyle(color: kSub, fontSize: 16, fontWeight: FontWeight.w600)),
           const SizedBox(width: 10),
           Expanded(
             child: DropdownButton<String>(
               isExpanded: true,
               isDense: true,
-              dropdownColor: kCard,
+              dropdownColor: Colors.white,
               underline: const SizedBox.shrink(),
               value: lang,
-              style: TextStyle(color: accent, fontSize: 17, fontWeight: FontWeight.w700),
+              style: const TextStyle(color: kPrimary, fontSize: 18, fontWeight: FontWeight.w700),
               items: [for (final e in kLangs.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
               onChanged: (v) => _set(() => me ? _me = v ?? _me : _other = v ?? _other),
             ),
@@ -192,36 +202,39 @@ class _TranslateScreenState extends State<TranslateScreen> {
         Expanded(
           child: SingleChildScrollView(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(read.isEmpty ? '...' : read, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w600, height: 1.25)),
+              Text(read.isEmpty ? 'Tap and hold the button to speak' : read, style: TextStyle(color: read.isEmpty ? kSub : kInk, fontSize: read.isEmpty ? 18 : 28, fontWeight: FontWeight.w700, height: 1.25)),
               if (said.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text(said, style: const TextStyle(color: Colors.white38, fontSize: 14)),
+                  child: Text(said, style: const TextStyle(color: kSub, fontSize: 15)),
                 ),
             ]),
           ),
         ),
         const SizedBox(height: 8),
-        GestureDetector(
-          onTapDown: (_) => _down(me),
-          onTapUp: (_) => _up(me),
-          onTapCancel: () => _up(me),
-          onLongPressEnd: (_) => _up(me),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            height: 64,
-            decoration: BoxDecoration(
-              color: rec ? accent : accent.withOpacity(0.22),
-              borderRadius: BorderRadius.circular(32),
-              boxShadow: rec ? [BoxShadow(color: accent.withOpacity(0.6), blurRadius: 18)] : null,
+        // raw touches, not tap gestures: a long press would otherwise cancel the tap and stop the recording early
+        Semantics(
+          button: true,
+          label: 'Hold to speak ${kLangs[lang] ?? ''}',
+          child: Listener(
+            onPointerDown: (_) => _down(me),
+            onPointerUp: (_) => _up(me),
+            onPointerCancel: (_) => _up(me),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              height: 64,
+              decoration: BoxDecoration(
+                color: rec ? const Color(0xFF084A3F) : kPrimary,
+                borderRadius: BorderRadius.circular(32),
+              ),
+              alignment: Alignment.center,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.mic, color: Colors.white),
+                const SizedBox(width: 8),
+                Text(rec ? 'Speak now...' : 'Hold to speak',
+                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+              ]),
             ),
-            alignment: Alignment.center,
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.mic, color: rec ? Colors.black : accent),
-              const SizedBox(width: 8),
-              Text(rec ? 'Speak now...' : 'Hold and speak ${kLangs[lang] ?? ''}',
-                  style: TextStyle(color: rec ? Colors.black : accent, fontSize: 17, fontWeight: FontWeight.w700)),
-            ]),
           ),
         ),
       ]),
@@ -240,7 +253,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
               child: Row(children: [
                 IconButton(
                   onPressed: () => Navigator.of(context).maybePop(),
-                  icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white54, size: 18),
+                  icon: const Icon(Icons.arrow_back_ios_new, color: kInk, size: 18),
                   tooltip: 'Back',
                 ),
                 Expanded(
@@ -249,15 +262,15 @@ class _TranslateScreenState extends State<TranslateScreen> {
                         ? Row(mainAxisSize: MainAxisSize.min, children: [
                             const TildaOrb(state: OrbState.thinking, size: 34),
                             const SizedBox(width: 6),
-                            Flexible(child: Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+                            Flexible(child: Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub, fontSize: 14))),
                           ])
-                        : Text(_status, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.amberAccent, fontSize: 13)),
+                        : Text(_status, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF9A5B00), fontSize: 14)),
                   ),
                 ),
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: Material(
-                    color: _buds ? kTeal : kCard,
+                    color: _buds ? kPrimary : kMint,
                     shape: const StadiumBorder(),
                     child: InkWell(
                       customBorder: const StadiumBorder(),
@@ -267,7 +280,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
                       }),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        child: Icon(Icons.headphones, size: 24, color: _buds ? Colors.black : Colors.white70),
+                        child: Tooltip(message: 'Earphones', child: Icon(Icons.headphones, size: 24, color: _buds ? Colors.white : kPrimary)),
                       ),
                     ),
                   ),

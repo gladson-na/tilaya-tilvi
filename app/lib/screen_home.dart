@@ -43,11 +43,10 @@ class _SetupScreenState extends State<SetupScreen> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Center(child: TildaOrb(state: OrbState.idle, size: 120)),
-              const SizedBox(height: 8),
-              const Text('Which languages can you speak?', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
-              const Text('Pick all that you speak. You can change this later.', style: TextStyle(color: Colors.white70)),
+              const Text('Speak your language', style: TextStyle(color: kInk, fontSize: 28, fontWeight: FontWeight.w800, height: 1.15)),
+              const SizedBox(height: 4),
+              const Text('Choose all that you use. You can change this later.', style: TextStyle(color: kSub, fontSize: 16)),
               const SizedBox(height: 14),
               Expanded(
                 child: SingleChildScrollView(
@@ -63,12 +62,12 @@ class _SetupScreenState extends State<SetupScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text('Write my notes in', style: TextStyle(color: Colors.white70)),
+              const Text('Write my notes in', style: TextStyle(color: kInk, fontSize: 17, fontWeight: FontWeight.w700)),
               DropdownButton<String>(
                 isExpanded: true,
-                dropdownColor: kCard,
+                dropdownColor: Colors.white,
                 value: _notes,
-                style: const TextStyle(color: Colors.white, fontSize: 16),
+                style: const TextStyle(color: kInk, fontSize: 17),
                 items: [for (final e in kLangs.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
                 onChanged: (v) => setState(() => _notes = v ?? _notes),
               ),
@@ -87,38 +86,37 @@ class _SetupScreenState extends State<SetupScreen> {
       );
 }
 
-/// Three big buttons. That is the whole app.
+/// Home: one clear way to start talking, then the other things Tilda does.
 class HomeScreen extends StatelessWidget {
   final VoidCallback onTalk, onCapture, onNotes, onTranslate, onSettings;
   const HomeScreen({super.key, required this.onTalk, required this.onCapture, required this.onNotes, required this.onTranslate, required this.onSettings});
 
-  Widget _big(IconData icon, String title, String sub, Color c, VoidCallback f) => Expanded(
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 14),
+  Widget _row(IconData icon, String title, String sub, VoidCallback f) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Semantics(
+          button: true,
+          label: '$title. $sub',
           child: Material(
-            color: kCard,
-            borderRadius: BorderRadius.circular(24),
+            color: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: kLine)),
             child: InkWell(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(18),
               onTap: f,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 child: Row(children: [
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(color: c.withOpacity(0.18), shape: BoxShape.circle),
-                    child: Icon(icon, color: c, size: 34),
-                  ),
-                  const SizedBox(width: 18),
+                  Icon(icon, color: kInk, size: 28),
+                  const SizedBox(width: 16),
                   Expanded(
-                    child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(title, style: const TextStyle(color: Colors.white, fontSize: 23, fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 2),
-                      Text(sub, style: const TextStyle(color: Colors.white60, fontSize: 14)),
-                    ]),
+                    child: ExcludeSemantics(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(title, style: const TextStyle(color: kInk, fontSize: 19, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text(sub, style: const TextStyle(color: kSub, fontSize: 15)),
+                      ]),
+                    ),
                   ),
-                  const Icon(Icons.chevron_right, color: Colors.white38),
+                  const Icon(Icons.chevron_right, color: kSub),
                 ]),
               ),
             ),
@@ -128,26 +126,50 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        backgroundColor: kNavy,
+        backgroundColor: kBg,
         body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 8, 18, 4),
-            child: Column(children: [
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            children: [
               Row(children: [
-                const SizedBox(width: 8),
-                const Text('Tilda', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
+                const Text('Tilda', style: TextStyle(color: kInk, fontSize: 30, fontWeight: FontWeight.w800)),
                 const Spacer(),
-                IconButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())), icon: const Icon(Icons.folder_open, color: Colors.white70), tooltip: 'Saved'),
-                IconButton(onPressed: onSettings, icon: const Icon(Icons.settings, color: Colors.white70)),
+                IconButton(
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())),
+                    icon: const Icon(Icons.bookmark_border, color: kInk, size: 28),
+                    tooltip: 'Saved'),
+                IconButton(onPressed: onSettings, icon: const Icon(Icons.settings_outlined, color: kInk, size: 28), tooltip: 'Settings'),
               ]),
-              const SizedBox(height: 4),
-              const TildaOrb(state: OrbState.idle, size: 110),
-              const SizedBox(height: 8),
-              _big(Icons.graphic_eq, 'Talk to Tilda', 'Ask anything, out loud', kBlue, onTalk),
-              _big(Icons.photo_camera, 'Capture', 'Read a sign, bill or medicine', kPink, onCapture),
-              _big(Icons.edit_note, 'Take notes', 'Listens to a class or video', kTeal, onNotes),
-              _big(Icons.translate, 'Translate', 'Two people, two languages', kOrange, onTranslate),
-            ]),
+              const SizedBox(height: 18),
+              const Text('What can I help with?', style: TextStyle(color: kInk, fontSize: 28, fontWeight: FontWeight.w800, height: 1.15)),
+              const SizedBox(height: 18),
+              TildaCard(
+                padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+                child: Column(children: [
+                  const TildaOrb(state: OrbState.idle, size: 150),
+                  const SizedBox(height: 14),
+                  const Text('Talk to Tilda', style: TextStyle(color: kInk, fontSize: 24, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  const Text('Ask a question. Say it naturally.', style: TextStyle(color: kSub, fontSize: 16)),
+                  const SizedBox(height: 18),
+                  Semantics(
+                    button: true,
+                    label: 'Start talking to Tilda',
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 58,
+                      child: FilledButton.icon(onPressed: onTalk, icon: const Icon(Icons.mic, size: 26), label: const Text('Start talking')),
+                    ),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 26),
+              const Text('Explore', style: TextStyle(color: kInk, fontSize: 20, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 10),
+              _row(Icons.photo_camera_outlined, 'Capture', 'Read text from a photo', onCapture),
+              _row(Icons.notes, 'Take notes', 'Turn speech into notes', onNotes),
+              _row(Icons.translate, 'Translate', 'Two people, two languages', onTranslate),
+            ],
           ),
         ),
       );

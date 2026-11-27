@@ -109,7 +109,10 @@ class _TalkScreenState extends State<TalkScreen> {
     await _listen();
   }
 
+  int _gen = 0; // bumped by Stop, so an answer still arriving never speaks after it
+
   Future<void> _stopAll() async {
+    _gen++;
     _active = false;
     _finishing = false;
     try {
@@ -154,7 +157,7 @@ class _TalkScreenState extends State<TalkScreen> {
       _lastVoice = now;
     }
     setState(() => _level = l);
-    if (_voiced && now.difference(_lastVoice).inMilliseconds > 1800) {
+    if (_voiced && now.difference(_lastVoice).inMilliseconds > 2500) { // a slower speaker who stops to think is not cut off
       unawaited(_finish());
     } else if (!_voiced && now.difference(_t0).inSeconds > 14) {
       unawaited(_stopAll());
@@ -221,6 +224,7 @@ class _TalkScreenState extends State<TalkScreen> {
   }
 
   Future<void> _ask(String heard) async {
+    final gen = _gen;
     final said = CallWords.strip(heard, widget.style);
     _history.add({'role': 'user', 'content': said});
     if (_fbKind != null && !_fbSent && said.length > _fbText.length) _fbText = said;
@@ -252,10 +256,12 @@ class _TalkScreenState extends State<TalkScreen> {
           _showAnswer(answer);
         }
         final a64 = j['audio'] as String?;
+        if (gen != _gen) break; // Stop was pressed: drop the rest of this answer
         if (a64 != null && _active) {
           if (!spoke) _set(() => _orb = OrbState.speaking);
           spoke = true;
           chain = chain.then((_) async {
+            if (gen != _gen) return;
             final done = _player.onPlayerComplete.first;
             await _player.play(BytesSource(base64Decode(a64)));
             await done.timeout(const Duration(seconds: 90));
@@ -264,6 +270,10 @@ class _TalkScreenState extends State<TalkScreen> {
       }
     } catch (_) {}
     await chain;
+    if (gen != _gen) {
+      _finishing = false;
+      return;
+    }
     if (answer.isEmpty) answer = 'Sorry, I could not answer that right now. Please try again.';
     _showAnswer(answer, final_: true);
     _history.add({'role': 'assistant', 'content': answer});
@@ -334,11 +344,10 @@ class _TalkScreenState extends State<TalkScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
         decoration: BoxDecoration(
-          color: me ? const Color(0xFF1D4ED8) : const Color(0xFF3A2A18),
-          border: me ? null : Border.all(color: kOrange.withOpacity(0.5)),
+          color: me ? kPrimary : kMint,
           borderRadius: BorderRadius.circular(18),
         ),
-        child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 17, height: 1.3)),
+        child: Text(text, style: TextStyle(color: me ? Colors.white : kInk, fontSize: 18, height: 1.35)),
       ),
     );
   }
@@ -348,17 +357,25 @@ class _TalkScreenState extends State<TalkScreen> {
     final showLive = _live.isNotEmpty;
     return Scaffold(
       backgroundColor: kNavy,
-      appBar: AppBar(backgroundColor: kNavy, foregroundColor: Colors.white, title: const Text('Talk to Tilda'), elevation: 0),
+      appBar: AppBar(title: const Text('Talk to Tilda')),
       body: SafeArea(
         child: Column(children: [
           const SizedBox(height: 4),
-          TildaOrb(state: _orb, level: _level, size: 190),
-          Text(_orb == OrbState.idle && _active ? 'Your turn' : orbLabel(_orb),
-              style: TextStyle(color: _orb == OrbState.speaking ? kOrange : kTeal, fontSize: 18, fontWeight: FontWeight.w600)),
+          TildaOrb(state: _orb, level: _level, size: 200),
+          const SizedBox(height: 6),
+          Semantics(
+            liveRegion: true,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(20)),
+              child: Text(_orb == OrbState.idle && _active ? 'Your turn' : orbLabel(_orb),
+                  style: const TextStyle(color: kPrimary, fontSize: 16, fontWeight: FontWeight.w700)),
+            ),
+          ),
           if (_status.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-              child: Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: kSub, fontSize: 16)),
             ),
           Expanded(
             child: ListView(
@@ -374,13 +391,13 @@ class _TalkScreenState extends State<TalkScreen> {
             Container(
               margin: const EdgeInsets.fromLTRB(14, 0, 14, 8),
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(16), border: Border.all(color: kTeal.withOpacity(0.5))),
+              decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(16)),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Send this ${_fbKind!} to the Tilda team?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                Text('Send this ${_fbKind!} to the Tilda team?', style: const TextStyle(color: kInk, fontWeight: FontWeight.w700, fontSize: 16)),
                 if (_fbText.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Text(_fbText, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70)),
+                    child: Text(_fbText, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub)),
                   ),
                 Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                   TextButton(onPressed: () => _set(() => _fbKind = null), child: const Text('Not now')),
@@ -396,43 +413,66 @@ class _TalkScreenState extends State<TalkScreen> {
                   child: TextField(
                     controller: _typeCtl,
                     autofocus: _noisy,
-                    style: const TextStyle(color: Colors.white),
+                    style: const TextStyle(color: kInk, fontSize: 17),
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _typed(),
                     decoration: InputDecoration(
                       hintText: 'Type to Tilda in any language',
-                      hintStyle: const TextStyle(color: Colors.white38),
+                      hintStyle: const TextStyle(color: kSub),
                       filled: true,
-                      fillColor: kCard,
+                      fillColor: kMint,
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
                     ),
                   ),
                 ),
-                IconButton(onPressed: _typed, icon: const Icon(Icons.send, color: kTeal)),
+                IconButton(onPressed: _typed, tooltip: 'Send', icon: const Icon(Icons.send, color: kPrimary)),
               ]),
             ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 14),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              IconButton(
-                iconSize: 30,
-                onPressed: () => _set(() => _typing = !_typing),
-                icon: Icon(_typing ? Icons.keyboard_hide : Icons.keyboard, color: Colors.white70),
-              ),
-              GestureDetector(
-                onTap: _toggle,
-                child: Container(
-                  width: 78,
-                  height: 78,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _active ? Colors.redAccent : kBlue,
-                    boxShadow: [BoxShadow(color: (_active ? Colors.redAccent : kBlue).withOpacity(0.5), blurRadius: 18)],
+            padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.end, children: [
+              SizedBox(
+                width: 64,
+                child: Semantics(
+                  button: true,
+                  label: _typing ? 'Hide the keyboard' : 'Type instead',
+                  child: InkWell(
+                    onTap: () => _set(() => _typing = !_typing),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: const BoxDecoration(color: kMint, shape: BoxShape.circle),
+                          child: Icon(_typing ? Icons.keyboard_hide_outlined : Icons.keyboard_outlined, color: kPrimary),
+                        ),
+                        const SizedBox(height: 4),
+                        const ExcludeSemantics(child: Text('Type', style: TextStyle(color: kSub, fontSize: 14))),
+                      ]),
+                    ),
                   ),
-                  child: Icon(_active ? Icons.stop : Icons.mic, color: Colors.white, size: 38),
                 ),
               ),
-              const SizedBox(width: 48),
+              Column(children: [
+                Semantics(
+                  button: true,
+                  label: _active ? 'Finish speaking' : 'Start talking',
+                  child: GestureDetector(
+                    onTap: _toggle,
+                    child: Container(
+                      width: 84,
+                      height: 84,
+                      decoration: const BoxDecoration(shape: BoxShape.circle, color: kPrimary),
+                      child: Icon(_active ? Icons.stop_rounded : Icons.mic, color: Colors.white, size: 40),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                ExcludeSemantics(child: Text(_active ? 'Finish speaking' : 'Start talking', style: const TextStyle(color: kInk, fontSize: 15))),
+              ]),
+              const SizedBox(width: 64),
             ]),
           ),
         ]),

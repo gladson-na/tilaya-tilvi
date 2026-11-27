@@ -67,11 +67,10 @@ class NotesService : Service() {
         @Suppress("DEPRECATION")
         val data: Intent? = intent?.getParcelableExtra<Intent>("data")
         val micOnly = intent?.getBooleanExtra("micOnly", false) == true
-        if (micOnly && notesRunning) return START_STICKY
         if (!micOnly) notesRunning = true
         val wantCapture = data != null && Build.VERSION.SDK_INT >= 29
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(7, n, if (wantCapture) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            startForeground(7, n, if (wantCapture || capturing) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } else startForeground(7, n)
         if (wantCapture && !capturing) startCapture(code, data!!)
         if (!micOnly) showGlow()

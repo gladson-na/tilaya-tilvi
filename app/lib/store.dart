@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -37,33 +38,59 @@ class Store {
 
   static Future<Directory> _d() async => _dir ??= await getApplicationDocumentsDirectory();
 
+  /// Set when the last save failed (full storage, for example), so the screens can say so instead of showing a false "Saved".
+  static String? lastError;
+  static Future<void> _chain = Future.value();
+  static int _lastId = 0;
+
   static Future<void> load() async {
     if (_loaded) return;
     _loaded = true;
+    final f = File('${(await _d()).path}/tilda_saved.json');
     try {
-      final f = File('${(await _d()).path}/tilda_saved.json');
       if (!f.existsSync()) return;
       final l = jsonDecode(await f.readAsString()) as List;
       items
         ..clear()
         ..addAll(l.map((e) => SavedItem.fromJson(e as Map<String, dynamic>)));
       items.sort((a, b) => b.id.compareTo(a.id));
-    } catch (_) {}
+    } catch (_) {
+      // an unreadable list is kept aside, never overwritten by the next save
+      try {
+        f.renameSync('${f.path}.damaged');
+      } catch (_) {}
+    }
   }
 
-  static Future<void> _write() async {
-    try {
-      final f = File('${(await _d()).path}/tilda_saved.json');
-      final tmp = File('${f.path}.tmp');
-      await tmp.writeAsString(jsonEncode(items.map((e) => e.toJson()).toList()));
-      await tmp.rename(f.path); // a half-written file never replaces a good one
-    } catch (_) {}
+  /// Saves go one after the other, so two quick saves cannot write over each other.
+  static Future<bool> _write() {
+    final done = Completer<bool>();
+    _chain = _chain.then((_) async {
+      try {
+        final f = File('${(await _d()).path}/tilda_saved.json');
+        final tmp = File('${f.path}.tmp');
+        await tmp.writeAsString(jsonEncode(items.map((e) => e.toJson()).toList()), flush: true);
+        await tmp.rename(f.path); // a half-written file never replaces a good one
+        lastError = null;
+        done.complete(true);
+      } catch (e) {
+        lastError = 'Could not save on this phone. Free some space and try again.';
+        done.complete(false);
+      }
+    });
+    return done.future;
   }
 
-  static String newId() => '${DateTime.now().millisecondsSinceEpoch}';
+  /// Ids are the time in milliseconds, but never the same twice, even for two saves in one millisecond.
+  static String newId() {
+    var n = DateTime.now().millisecondsSinceEpoch;
+    if (n <= _lastId) n = _lastId + 1;
+    _lastId = n;
+    return '$n';
+  }
 
   /// Adds the item, or replaces the one with the same id (notes are saved again after every new sentence).
-  static Future<void> put(SavedItem it) async {
+  static Future<bool> put(SavedItem it) async {
     await load();
     final i = items.indexWhere((e) => e.id == it.id);
     if (i >= 0) {
@@ -71,7 +98,7 @@ class Store {
     } else {
       items.insert(0, it);
     }
-    await _write();
+    return _write();
   }
 
   static Future<String> savePhoto(String id, Uint8List bytes) async {

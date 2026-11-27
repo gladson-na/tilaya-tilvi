@@ -170,7 +170,7 @@ class _NotesScreenState extends State<NotesScreen> {
           _keep();
           unawaited(_extras(text).then((_) => _keep()));
         } catch (_) {
-          _set(() => _status = 'Waiting for the network. Your recording is kept.');
+          _set(() => _status = 'Waiting for the network. I will keep trying while this screen is open.');
           if (_waiting.length > 40) _waiting.removeAt(0);
           break;
         }
@@ -184,13 +184,15 @@ class _NotesScreenState extends State<NotesScreen> {
   void _keep() {
     if (_spoken.trim().isEmpty) return;
     final first = _spoken.trim().split(RegExp(r'\s+')).take(7).join(' ');
-    unawaited(Store.put(SavedItem(
+    Store.put(SavedItem(
       id: _id,
       kind: 'note',
       title: first,
       lang: _src,
       parts: {'spoken': _spoken, 'letters': _lettersText, 'meaning': _meaningText, 'summary': _summary},
-    )));
+    )).then((ok) {
+      if (!ok) _set(() => _status = Store.lastError ?? 'Could not save.');
+    });
   }
 
   Future<void> _extras(String text) async {
@@ -251,7 +253,12 @@ class _NotesScreenState extends State<NotesScreen> {
       _summarising = true;
       _status = 'Making your notes...';
     });
-    await _work();
+    await _drain();
+    if (_waiting.isNotEmpty) {
+      // the last part never reached the server: say so, rather than claiming it is kept
+      _waiting.clear();
+      _set(() => _status = 'The internet dropped, so the last part is not in your notes.');
+    }
     if (_spoken.trim().length < 20) {
       _set(() {
         _summarising = false;
@@ -260,6 +267,15 @@ class _NotesScreenState extends State<NotesScreen> {
       return;
     }
     await _makeSummary();
+  }
+
+  /// Waits until every piece has been written, including one that was already being sent when Stop was pressed.
+  Future<void> _drain() async {
+    for (var i = 0; i < 180; i++) {
+      await _work();
+      if (!_working) return;
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
   }
 
   Future<void> _makeSummary() async {
@@ -308,25 +324,25 @@ class _NotesScreenState extends State<NotesScreen> {
   Widget _toggle(String label, String sub, bool v, void Function(bool) f) => SwitchListTile(
         dense: true,
         contentPadding: EdgeInsets.zero,
-        activeColor: kTeal,
-        title: Text(label, style: const TextStyle(color: Colors.white)),
-        subtitle: Text(sub, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        activeColor: kPrimary,
+        title: Text(label, style: const TextStyle(color: kInk)),
+        subtitle: Text(sub, style: const TextStyle(color: kSub, fontSize: 13)),
         value: v,
         onChanged: f,
       );
 
   Widget _picker(String label, String value, void Function(String) f) => Row(children: [
-        SizedBox(width: 150, child: Text(label, style: const TextStyle(color: Colors.white70))),
+        SizedBox(width: 140, child: Text(label, style: const TextStyle(color: kSub, fontSize: 15))),
         Expanded(
           child: DropdownButton<String>(
             isExpanded: true,
             isDense: true,
-            dropdownColor: kCard,
+            dropdownColor: Colors.white,
             underline: const SizedBox.shrink(),
             value: value.isEmpty || !kLangs.containsKey(value) ? '' : value,
-            style: const TextStyle(color: kTeal, fontSize: 17, fontWeight: FontWeight.w700),
+            style: const TextStyle(color: kPrimary, fontSize: 17, fontWeight: FontWeight.w700),
             items: [
-              const DropdownMenuItem(value: '', child: Text('Off', style: TextStyle(color: Colors.white54))),
+              const DropdownMenuItem(value: '', child: Text('Off', style: TextStyle(color: kSub))),
               for (final e in kLangs.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
             ],
             onChanged: (v) => f(v ?? ''),
@@ -340,7 +356,7 @@ class _NotesScreenState extends State<NotesScreen> {
     if (!tabs.any((t) => t.$1 == _tab)) _tab = 0;
     return Scaffold(
       backgroundColor: kNavy,
-      appBar: AppBar(backgroundColor: kNavy, foregroundColor: Colors.white, elevation: 0, title: const Text('Take notes'), actions: [IconButton(icon: const Icon(Icons.folder_open), tooltip: 'Saved', onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())))]),
+      appBar: AppBar(title: const Text('Notes'), actions: [IconButton(icon: const Icon(Icons.bookmark_border), tooltip: 'Saved', onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())))]),
       body: GlowFrame(
         on: _on,
         quiet: _quiet,
@@ -350,12 +366,12 @@ class _NotesScreenState extends State<NotesScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(16)),
+                decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(16)),
                 child: Column(children: [
                   Row(children: [
-                    Icon(Icons.fiber_manual_record, size: 14, color: _on ? (_quiet ? Colors.grey : Colors.redAccent) : Colors.white38),
+                    Icon(Icons.fiber_manual_record, size: 14, color: _on ? (_quiet ? Colors.grey : Colors.redAccent) : kSub),
                     const SizedBox(width: 8),
-                    const Expanded(child: Text('Written as spoken, in any language', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+                    const Expanded(child: Text('Written as you speak, in any language', style: TextStyle(color: kInk, fontWeight: FontWeight.w700, fontSize: 16))),
                   ]),
                   _picker('2nd copy, written in', _l2, (v) => _pick(true, v)),
                   _picker('Translation in', _l3, (v) => _pick(false, v)),
@@ -370,18 +386,18 @@ class _NotesScreenState extends State<NotesScreen> {
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(color: kCard.withOpacity(0.7), borderRadius: BorderRadius.circular(16)),
+                  decoration: BoxDecoration(color: Colors.white, border: Border.all(color: kLine), borderRadius: BorderRadius.circular(16)),
                   child: SingleChildScrollView(
                     reverse: _on,
                     child: SelectableText(
                       _shown,
-                      style: const TextStyle(color: Colors.white, fontSize: 17, height: 1.4),
+                      style: const TextStyle(color: kInk, fontSize: 18, height: 1.45),
                     ),
                   ),
                 ),
               ),
               const SizedBox(height: 8),
-              Text(_status, textAlign: TextAlign.center, style: TextStyle(color: _quiet ? Colors.amberAccent : Colors.white70)),
+              Text(_status, textAlign: TextAlign.center, style: TextStyle(color: _quiet ? const Color(0xFF9A5B00) : kSub, fontSize: 15)),
               const SizedBox(height: 8),
               if (!_on && !_summarising && _spoken.trim().length >= 20 && _summary.isEmpty)
                 TextButton.icon(onPressed: _makeSummary, icon: const Icon(Icons.auto_awesome), label: const Text('Make summary')),
@@ -396,14 +412,14 @@ class _NotesScreenState extends State<NotesScreen> {
                 if (_summary.isNotEmpty || _spoken.isNotEmpty)
                   IconButton(
                     onPressed: () => Clipboard.setData(ClipboardData(text: _shown)),
-                    icon: const Icon(Icons.copy, color: Colors.white70),
+                    icon: const Icon(Icons.copy, color: kPrimary),
                     tooltip: 'Copy',
                   ),
                 Expanded(
                   child: SizedBox(
                     height: 56,
                     child: FilledButton(
-                      style: FilledButton.styleFrom(backgroundColor: _on ? Colors.redAccent : kTeal, foregroundColor: Colors.black),
+                      style: FilledButton.styleFrom(backgroundColor: _on ? const Color(0xFFB3261E) : kPrimary, foregroundColor: Colors.white),
                       onPressed: _summarising ? null : (_on ? _stop : _start),
                       child: Text(_on ? 'Stop and make notes' : (_spoken.isEmpty ? 'Start notes' : 'Start again'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                     ),
