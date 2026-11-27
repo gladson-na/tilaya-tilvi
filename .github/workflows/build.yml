@@ -53,6 +53,15 @@ jobs:
       - name: Use the same signing key every build so updates install over the old app
         run: mkdir -p ~/.android && cp signing/debug.keystore ~/.android/debug.keystore
         working-directory: app
+      - name: Unit tests for the call-words
+        run: flutter test test/callwords_test.dart
+        working-directory: app
+      - name: Let the screen fill the camera hole and rounded corners
+        run: |
+          for f in $(find android/app/src -name styles.xml); do
+            sed -i 's#\(<style name="\(Launch\|Normal\)Theme"[^>]*>\)#\1\n        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>#' "$f"
+          done
+        working-directory: app
       - name: Add the offline text-reading models (Hindi script plus the other three the plugin expects)
         run: |
           F=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
@@ -66,6 +75,34 @@ jobs:
         working-directory: app
       - uses: actions/upload-artifact@v4
         with: { name: tilda-android-apk, path: app/build/app/outputs/flutter-apk/app-release.apk }
+
+  emulator:
+    # Installs the finished app on virtual phones with old, middle and new Android, opens it, and checks it stays alive.
+    # Informational: it does not stop a release, because a virtual phone is not a real one.
+    needs: [android]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [23, 26, 29, 33, 34]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tilda-android-apk, path: out }
+      - name: Which phone types the app carries code for
+        run: unzip -l out/app-release.apk | grep -o 'lib/[a-z0-9_-]*/' | sort | uniq -c
+      - name: Allow the virtual phone to run fast
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: bash scripts/smoke.sh out/app-release.apk
 
   windows:
     runs-on: windows-latest

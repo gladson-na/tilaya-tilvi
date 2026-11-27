@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'personal_style.dart';
+import 'screen_saved.dart';
 import 'widgets.dart';
 
 /// First run: which languages do you speak? Nothing is ticked for you.
@@ -136,6 +137,7 @@ class HomeScreen extends StatelessWidget {
                 const SizedBox(width: 8),
                 const Text('Tilda', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
                 const Spacer(),
+                IconButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())), icon: const Icon(Icons.folder_open, color: Colors.white70), tooltip: 'Saved'),
                 IconButton(onPressed: onSettings, icon: const Icon(Icons.settings, color: Colors.white70)),
               ]),
               const SizedBox(height: 4),
