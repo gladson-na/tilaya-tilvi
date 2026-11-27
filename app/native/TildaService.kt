@@ -41,6 +41,35 @@ class TildaService : AccessibilityService() {
     private var longFired = false
     private val lpR = Runnable { longFired = true; onLongPress?.invoke() }
 
+    /** One tap on the bubble: always answers something, even when the app screen is gone. */
+    private fun tapped() {
+        val cb = onTap
+        if (cb == null) {
+            // the app was closed: open it so it can take the next tap
+            showLabel("Open")
+            try {
+                val i = packageManager.getLaunchIntentForPackage(packageName)
+                if (i != null) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i) }
+            } catch (_: Exception) {}
+            return
+        }
+        showLabel("…")
+        startMic()
+        try { cb() } catch (_: Exception) { showLabel("!"); stopMic() }
+    }
+
+    /** Keeps the microphone allowed while another app is on screen (Android blocks it otherwise). */
+    private fun startMic() {
+        try {
+            val i = Intent(this, NotesService::class.java).putExtra("micOnly", true)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        } catch (_: Exception) {}
+    }
+
+    private fun stopMic() {
+        try { if (!NotesService.notesRunning) stopService(Intent(this, NotesService::class.java)) } catch (_: Exception) {}
+    }
+
     private fun showLabel(t: String) {
         labelOverride = t
         bubble?.let { paint(it) }
@@ -145,7 +174,7 @@ class TildaService : AccessibilityService() {
                             try { wm2.updateViewLayout(v, lp) } catch (_: Exception) {}
                         }
                     }
-                    android.view.MotionEvent.ACTION_UP -> { handler.removeCallbacks(lpR); if (!moved && !longFired) onTap?.invoke() }
+                    android.view.MotionEvent.ACTION_UP -> { handler.removeCallbacks(lpR); if (!moved && !longFired) tapped() }
                 }
                 true
             }
@@ -167,6 +196,7 @@ class TildaService : AccessibilityService() {
 
     fun setState(s: String) {
         st = s
+        if (s == "idle" || s == "done" || s == "nothing") handler.postDelayed({ if (st != "recording" && st != "working") stopMic() }, 2500)
         bubble?.let { paint(it) }
         if (s == "nothing") handler.postDelayed({ if (st == "nothing") setState("idle") }, 2500)
         if (s == "idle" && !onField) handler.postDelayed(hideR, 2500)

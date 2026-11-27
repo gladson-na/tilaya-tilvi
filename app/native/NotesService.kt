@@ -36,6 +36,7 @@ class NotesService : Service() {
         private val buf = ByteArrayOutputStream()
         @Volatile var level = 0.0
         @Volatile var capturing = false
+        @Volatile var notesRunning = false
         fun take(): ByteArray = synchronized(buf) { val b = buf.toByteArray(); buf.reset(); b }
     }
 
@@ -65,12 +66,15 @@ class NotesService : Service() {
         val code = intent?.getIntExtra("code", 0) ?: 0
         @Suppress("DEPRECATION")
         val data: Intent? = intent?.getParcelableExtra<Intent>("data")
+        val micOnly = intent?.getBooleanExtra("micOnly", false) == true
+        if (micOnly && notesRunning) return START_STICKY
+        if (!micOnly) notesRunning = true
         val wantCapture = data != null && Build.VERSION.SDK_INT >= 29
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(7, n, if (wantCapture) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } else startForeground(7, n)
         if (wantCapture && !capturing) startCapture(code, data!!)
-        showGlow()
+        if (!micOnly) showGlow()
         return START_STICKY
     }
 
@@ -162,6 +166,7 @@ class NotesService : Service() {
     }
 
     override fun onDestroy() {
+        notesRunning = false
         capturing = false
         try { worker?.join(300) } catch (e: Exception) {}
         try { rec?.stop(); rec?.release() } catch (e: Exception) {}

@@ -42,6 +42,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     WidgetsBinding.instance.addObserver(this);
     final mine = widget.style.myLangs.where(kLangs.containsKey).toList();
     _lang = mine.isNotEmpty ? mine.first : 'en-IN';
+    Api.wake().ignore(); // the free server sleeps when idle: wake it while the camera opens
     _openCamera();
   }
 
@@ -131,10 +132,16 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       });
       Map<String, dynamic> j;
       try {
-        j = await Api.readPhoto(base64Encode(bytes), _lang);
-      } catch (_) {
-        // No internet or the server is busy: read the words on the phone itself (Hindi, Marathi and English).
-        await _readOffline(x.path, bytes);
+        try {
+          j = await Api.readPhoto(base64Encode(bytes), _lang);
+        } catch (_) {
+          // the server may have been asleep: wake it and try once more before giving up
+          await Api.wake();
+          j = await Api.readPhoto(base64Encode(bytes), _lang);
+        }
+      } catch (e) {
+        // No internet or the reader is busy: read the words on the phone itself, and say why
+        await _readOffline(x.path, bytes, why: _why(e));
         return;
       }
       final t = (j['text'] ?? '') as String;
@@ -142,7 +149,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       _set(() {
         _text = t;
         _original = o;
-        _error = t.isEmpty ? 'I could not find any words in that photo. Please try again, closer and in good light.' : '';
+        _error = t.isEmpty ? 'I could not find any words. Move the phone closer, hold it steady, and use more light.' : '';
         _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
       });
       if (t.isNotEmpty) await _keep(bytes, t, o);
@@ -164,7 +171,16 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     } catch (_) {}
   }
 
-  Future<void> _readOffline(String path, Uint8List bytes) async {
+  /// A short, plain reason for a failed online read.
+  String _why(Object e) {
+    final m = e.toString();
+    if (m.contains('SocketException') || m.contains('Failed host lookup') || m.contains('ClientException')) return 'no internet';
+    if (m.contains('Timeout')) return 'the server was too slow';
+    if (m.contains('key not set')) return 'the reader is not switched on';
+    return 'the online reader is busy';
+  }
+
+  Future<void> _readOffline(String path, Uint8List bytes, {String why = 'no internet'}) async {
     final rec = TextRecognizer(script: TextRecognitionScript.devanagiri);
     try {
       final r = await rec.processImage(InputImage.fromFilePath(path));
@@ -174,8 +190,8 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
         _text = t;
         _original = '';
         _error = t.isEmpty
-            ? 'No internet, and I could not read any Hindi or English words in that photo. Try closer, in good light.'
-            : 'No internet: reading the words as written, without translation.';
+            ? 'The online reader did not answer ($why), and I could not read any words on the phone. Move the phone closer, hold it steady, and use more light.'
+            : 'The online reader did not answer ($why). Reading the words as written, without translation.';
         _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
       });
       if (t.isNotEmpty) {

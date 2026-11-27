@@ -314,16 +314,28 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _bubbleToggle() {
-    unawaited(_wake());
-    if (_liveSession) {
-      _stopLive();
-    } else if (_recording) {
-      _stop();
-    } else if (_liveOn && Platform.isAndroid && !_talk) {
-      _startLive();
-    } else {
-      _bubbleSession = true;
-      _start();
+    unawaited(_bubbleToggleSafe());
+  }
+
+  Future<void> _bubbleToggleSafe() async {
+    try {
+      unawaited(_wake());
+      if (_liveSession) {
+        await _stopLive();
+      } else if (_recording) {
+        await _stop();
+      } else if (_liveOn && Platform.isAndroid && !_talk) {
+        await _startLive();
+      } else {
+        _bubbleSession = true;
+        await _start();
+      }
+    } catch (e) {
+      _recording = false;
+      _liveSession = false;
+      _native.invokeMethod('label', '!').catchError((_) => false);
+      _tellBubble('nothing');
+      if (mounted) setState(() => _info = 'The bubble could not start: $e');
     }
   }
 
@@ -491,6 +503,8 @@ class _HomePageState extends State<HomePage> {
     }
     if (!await _recorder.hasPermission()) {
       setState(() => _info = 'Microphone permission is needed.');
+      _native.invokeMethod('label', 'Mic?').catchError((_) => false);
+      _tellBubble('nothing');
       return;
     }
     _sess = DateTime.now().millisecondsSinceEpoch;
