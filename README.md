@@ -15,9 +15,15 @@ The first commit in this repo is dated 15 Nov 2026. Everything below is visible 
 
 **Before Round 2 opened (15 to 26 Nov 2026)**
 - 15 Nov: project started. Voice dictation in Indian languages, free hosting setup (Dockerfile and Render blueprint).
-- 16 Nov: Translator (speak in one language, hear it in another). Floating bubble that dictates over any app.
+- 16 Nov: first Translator (speak in one language, hear it in another). Floating bubble that dictates over any app.
 - 18 Nov: Talk agent (spoken answers, automatic turn-taking).
-- 25 to 26 Nov: live word-by-word typing, the redesigned app (Talk, Notes, Translate with animations), complaints and suggestions delivered by Telegram.
+- 25 Nov: live word-by-word typing, bubble improvements.
+- 25 Nov, 8 pm IST: masterclass.
+
+**After the masterclass (26 Nov 2026)**
+- Note-taking feature built: Notes with background recording, three copies of each note (as spoken, second script, meaning), noise filtering, earbud mode, internal-audio capture and summary.
+- The Translator was rebuilt into the redesigned app (Talk, Notes, Translate with animations).
+- Complaints and suggestions delivered by Telegram.
 
 **After Round 2 opened (27 Nov 2026, 00:00 IST onward)**
 - Docker one-command start with no keys, tested in the build.
