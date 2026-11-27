@@ -73,6 +73,8 @@ jobs:
           printf 'allprojects { tasks.configureEach { t -> if (t.name.startsWith("lintVital") || t.name.startsWith("lintAnalyze")) t.enabled = false } }\n' > ~/.gradle/init.d/nolint.gradle
       - run: flutter build apk --release
         working-directory: app
+      - name: Which part of the app needs Android 7 or newer
+        run: grep -rhE "minSdkVersion|uses-sdk" app/build/outputs/logs/manifest-merger-release-report.txt | sort | uniq -c | head -30; grep -E "minSdk" app/android/app/build.gradle* || true
       - uses: actions/upload-artifact@v4
         with: { name: tilda-android-apk, path: app/build/app/outputs/flutter-apk/app-release.apk }
 
