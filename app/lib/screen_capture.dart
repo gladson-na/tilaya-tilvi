@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -30,7 +31,9 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   final _tts = FlutterTts();
   final _stt = LiveStt();
   bool _asking = false; // listening for a question about the product
-  String _asked = '', _answer = '';
+  String _asked = ''; // the question being asked right now
+  final List<List<String>> _qa = []; // every question and its answer, kept for this photo
+  String? _keptId, _keptPhoto;
   CameraController? _cam;
   String _camError = '';
   OrbState _orb = OrbState.idle;
@@ -141,7 +144,9 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
         _text = '';
         _original = '';
         _error = '';
-        _asked = _answer = '';
+        _asked = '';
+        _qa.clear();
+        _keptId = _keptPhoto = null;
         _orb = OrbState.reading;
       });
       Map<String, dynamic> j;
@@ -184,8 +189,22 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       final id = Store.newId();
       final name = await Store.savePhoto(id, bytes);
       final first = text.trim().split(RegExp(r'\s+')).take(7).join(' ');
+      _keptId = id;
+      _keptPhoto = name;
       final ok = await Store.put(SavedItem(id: id, kind: 'photo', title: first, lang: _lang, photo: name, parts: {'text': text, 'original': original}));
       if (!ok) _set(() => _error = Store.lastError ?? 'Could not save this photo.');
+    } catch (_) {}
+  }
+
+  /// Saves the photo again with what is on screen now: the words in the chosen language, and every question with its answer.
+  Future<void> _resave() async {
+    final id = _keptId;
+    if (id == null || _text.isEmpty) return;
+    try {
+      final first = _text.trim().split(RegExp(r'\s+')).take(7).join(' ');
+      final qa = _qa.map((e) => 'Q: ${e[0]}\n${e[1]}').join('\n\n');
+      await Store.put(SavedItem(id: id, kind: 'photo', title: first, lang: _lang, photo: _keptPhoto,
+          parts: {'text': _text, 'original': _original, if (qa.isNotEmpty) 'questions': qa}));
     } catch (_) {}
   }
 
@@ -285,6 +304,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
         _sel = -1;
         _orb = OrbState.idle;
       });
+      unawaited(_resave());
       if (_paras.length < 3) await _say(t);
     } catch (_) {
       if (my != _rg || !mounted) return;
@@ -308,7 +328,6 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     _set(() {
       _asking = true;
       _asked = '';
-      _answer = '';
       _error = '';
     });
     final ok = await _stt.start(
@@ -326,9 +345,11 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
           final a = (await Api.ask(t, _original.isNotEmpty ? _original : _text, _lang)).trim();
           if (!mounted) return;
           _set(() {
-            _answer = a;
+            if (a.isNotEmpty) _qa.add([t, a]);
+            _asked = '';
             _orb = OrbState.speaking;
           });
+          unawaited(_resave());
           await _say(a);
         } catch (_) {
           if (mounted) _set(() => _error = 'I could not find that just now. Please check the internet and ask again.');
@@ -466,21 +487,27 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
               if (_photo != null)
                 ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover))),
               const SizedBox(height: 14),
-              if (_asking || _asked.isNotEmpty || _answer.isNotEmpty)
+              for (final qa in _qa)
                 Container(
                   width: double.infinity,
                   margin: const EdgeInsets.only(bottom: 14),
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(14), border: Border.all(color: kPrimary)),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(_asking && _asked.isEmpty ? 'Listening… ask about this product' : _asked, style: const TextStyle(color: kSub, fontSize: 16)),
-                    if (_answer.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      SelectableText(_answer, style: const TextStyle(color: kInk, fontSize: 21, height: 1.35, fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 6),
-                      const Text('From the web. Prices and details can change.', style: TextStyle(color: kSub, fontSize: 14)),
-                    ],
+                    Text(qa[0], style: const TextStyle(color: kSub, fontSize: 16)),
+                    const SizedBox(height: 8),
+                    SelectableText(qa[1], style: const TextStyle(color: kInk, fontSize: 21, height: 1.35, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    const Text('From the web. Prices and details can change.', style: TextStyle(color: kSub, fontSize: 14)),
                   ]),
+                ),
+              if (_asking || _asked.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(14), border: Border.all(color: kPrimary)),
+                  child: Text(_asking && _asked.isEmpty ? 'Listening… ask about this product' : _asked, style: const TextStyle(color: kSub, fontSize: 16)),
                 ),
               if (_orb == OrbState.reading) const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
               if (_text.isNotEmpty && _paras.length < 3) SelectableText(_text, style: const TextStyle(color: kInk, fontSize: 28, height: 1.35, fontWeight: FontWeight.w700)),

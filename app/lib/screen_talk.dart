@@ -21,7 +21,8 @@ final _needsPlace = RegExp(
 /// One open conversation: talk or type, Tilda answers out loud and in writing.
 class TalkScreen extends StatefulWidget {
   final PersonalStyle style;
-  const TalkScreen({super.key, required this.style});
+  final String? startWith; // "Hey Tilda, ..." was heard on the home page: carry on from it
+  const TalkScreen({super.key, required this.style, this.startWith});
 
   @override
   State<TalkScreen> createState() => _TalkScreenState();
@@ -64,6 +65,11 @@ class _TalkScreenState extends State<TalkScreen> {
     super.initState();
     _tts.awaitSpeakCompletion(true);
     unawaited(Api.wake());
+    final first = widget.startWith;
+    if (first != null && first.trim().isNotEmpty) {
+      _woke = true;
+      Future.delayed(const Duration(milliseconds: 250), () => mounted ? _wakeUp(first) : null);
+    }
     Future.delayed(const Duration(milliseconds: 900), _startWake);
   }
 

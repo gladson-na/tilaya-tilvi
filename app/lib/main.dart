@@ -150,7 +150,10 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  final _hearHome = LiveStt(); // waits for "Hey Tilda" while the app is open on the home page
+  bool _foreground = true, _hearBusy = false;
+  Timer? _hearT;
   final _recorder = AudioRecorder();
   final _url = TextEditingController(text: 'https://tilda-backend-opfj.onrender.com');
   StreamSubscription<Uint8List>? _sub;
@@ -217,6 +220,8 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _hearT = Timer.periodic(const Duration(seconds: 5), (_) => _startHearHome());
     _retry = Timer.periodic(const Duration(seconds: 10), (_) => _flush());
     if (Platform.isAndroid) {
       FlutterOverlayWindow.overlayListener.listen((e) {
@@ -244,7 +249,11 @@ class _HomePageState extends State<HomePage> {
         } catch (_) {}
       });
     }
-    _style.load().then((_) => mounted ? setState(() => _styleLoaded = true) : null);
+    _style.load().then((_) {
+      if (!mounted) return;
+      setState(() => _styleLoaded = true);
+      Future.delayed(const Duration(milliseconds: 800), _startHearHome);
+    });
     _asr.check().then((_) async {
       if (mounted) setState(() {});
       // the phone-only engine is the safety net: fetch it once, by itself
@@ -261,9 +270,50 @@ class _HomePageState extends State<HomePage> {
     _tick.value++; // keeps the old test screen alive when it is opened from settings
   }
 
-  void _open(Widget w) {
+  Future<void> _open(Widget w) async {
     Api.base = _url.text.trim();
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
+    await _hearHome.stop();
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
+    _startHearHome();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) {
+      _startHearHome();
+    } else {
+      _hearHome.stop();
+    }
+  }
+
+  /// With the app open on the home page, the phone's own speech engine waits for "Hey Tilda" and then opens Talk.
+  Future<void> _startHearHome() async {
+    if (!mounted || !Platform.isAndroid || !_styleLoaded || !_style.setupDone || !_style.callDone) return;
+    if (!_foreground || _hearBusy || _hearHome.active || ModalRoute.of(context)?.isCurrent != true) return;
+    _hearBusy = true;
+    try {
+      final l = _style.myLangs;
+      final one = l.contains('en-IN') ? 'en-IN' : (l.isNotEmpty ? l.first : 'en-IN');
+      await _hearHome.start(
+        locale: one == 'od-IN' ? 'or-IN' : one,
+        onPartial: _heardHome,
+        onPhrase: _heardHome,
+        onEnd: (why) {
+          if (!mounted || !_foreground) return;
+          Future.delayed(Duration(milliseconds: (why == 'quiet' || why == 'error_no_match') ? 400 : 1500), _startHearHome);
+        },
+      );
+    } finally {
+      _hearBusy = false;
+    }
+  }
+
+  void _heardHome(String t) {
+    if (!_hearHome.active || !CallWords.called(t, _style)) return;
+    unawaited(_hearHome.stop());
+    _open(TalkScreen(style: _style, startWith: t));
   }
 
   void _openClassic() {
@@ -961,6 +1011,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _hearT?.cancel();
+    _hearHome.stop();
     _retry?.cancel();
     _wakeT?.cancel();
     _live.stop();
@@ -974,6 +1027,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _openSettings() async {
+    await _hearHome.stop();
     if (Platform.isAndroid) {
       try {
         _nativeOn = await _native.invokeMethod<bool>('enabled') ?? false;
