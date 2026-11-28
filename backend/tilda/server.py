@@ -204,7 +204,46 @@ def read_photo():
         return jsonify(original="(demo) Take one tablet after food", text="(demo) खाने के बाद एक गोली लें")
     from .translate import NAMES
     try:
-        return jsonify(tools.read_image(img, NAMES.get(lang, "English")))
+        return jsonify(tools.read_image(img, NAMES.get(lang, "English"), lang))
+    except tools.ToolError as e:
+        return jsonify(error=str(e)), 502
+
+
+@app.post("/relabel")
+def relabel():
+    """The label text already read, translated again into another language, paragraph by paragraph."""
+    j = jbody()
+    original, lang = str(j.get("original", "")).strip(), j.get("lang", "en-IN")
+    if not original:
+        return jsonify(error="nothing to translate"), 400
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(text="(demo) " + original)
+    from .translate import NAMES
+    text = tools._faithful(original, lang, NAMES.get(lang, "English")) if not lang.startswith("en") else original
+    if not text:
+        return jsonify(error="could not translate just now"), 502
+    facts = tools.label_facts(original)
+    if facts and not lang.startswith("en"):
+        try:
+            from .translate import translate
+            facts = translate(facts, "en-IN", lang).strip() or facts
+        except Exception:
+            pass
+    return jsonify(text=(text + "\n\n" + facts).strip() if facts else text)
+
+
+@app.post("/ask")
+def ask_product():
+    """A spoken question about a photographed product: price, ingredients, anything on the web. Facts only."""
+    j = jbody()
+    q, label, lang = str(j.get("question", "")).strip(), str(j.get("label", "")), j.get("lang", "en-IN")
+    if len(q) < 3:
+        return jsonify(error="no question received"), 400
+    if os.environ.get("TILDA_FAKE"):
+        return jsonify(text="(demo) Around Rs 14 to 22. Prices change.")
+    from .translate import NAMES
+    try:
+        return jsonify(text=tools.product_answer(q, label, NAMES.get(lang, "English")))
     except tools.ToolError as e:
         return jsonify(error=str(e)), 502
 

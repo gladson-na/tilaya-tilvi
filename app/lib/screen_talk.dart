@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import 'api.dart';
 import 'personal_style.dart';
 import 'callwords.dart';
+import 'live_stt.dart';
 import 'screen_capture.dart';
 import 'widgets.dart';
 
@@ -51,6 +52,9 @@ class _TalkScreenState extends State<TalkScreen> {
   String _fbText = '';
   bool _fbSent = false;
   bool _ttsDown = false;
+  final _wake = LiveStt(); // listens for "Hey Tilda" while the conversation is closed
+  bool _handsFree = true;
+  bool _woke = false;
   bool _viaType = false; // this turn was typed, so do not switch the mic on afterwards
 
   @override
@@ -58,11 +62,69 @@ class _TalkScreenState extends State<TalkScreen> {
     super.initState();
     _tts.awaitSpeakCompletion(true);
     unawaited(Api.wake());
+    Future.delayed(const Duration(milliseconds: 900), _startWake);
+  }
+
+  String get _wakeLocale {
+    final l = widget.style.myLangs;
+    final one = l.contains('en-IN') ? 'en-IN' : (l.isNotEmpty ? l.first : 'en-IN');
+    return one == 'od-IN' ? 'or-IN' : one;
+  }
+
+  /// With the app open and nobody talking yet, the phone's own speech engine waits for a call-word and Tilda's name.
+  Future<void> _startWake() async {
+    if (!mounted || !_handsFree || _active || _wake.active) return;
+    _woke = false;
+    final ok = await _wake.start(
+      locale: _wakeLocale,
+      onPartial: _heardWake,
+      onPhrase: _heardWake,
+      onEnd: (why) {
+        if (!mounted) return;
+        if (why == 'quiet' || why == 'error_no_match') {
+          Future.delayed(const Duration(milliseconds: 500), _startWake);
+        }
+      },
+    );
+    if (!ok && mounted) _set(() => _handsFree = false);
+  }
+
+  void _heardWake(String t) {
+    if (_woke || _active || !_handsFree) return;
+    if (!CallWords.called(t, widget.style)) return;
+    _woke = true;
+    unawaited(_wakeUp(t));
+  }
+
+  Future<void> _wakeUp(String heard) async {
+    await _wake.stop();
+    if (!mounted) return;
+    _active = true;
+    _noisy = false;
+    _empty = 0;
+    final rest = CallWords.strip(heard, widget.style);
+    if (rest.trim().isNotEmpty && rest.trim() != heard.trim()) {
+      _viaType = false;
+      await _ask(heard); // "Hey Tilda, what is the weather": the question came with the call
+    } else {
+      await _listen();
+    }
+  }
+
+  Future<void> _toggleHandsFree() async {
+    _set(() => _handsFree = !_handsFree);
+    if (_handsFree) {
+      await _startWake();
+    } else {
+      await _wake.stop();
+    }
   }
 
   @override
   void dispose() {
     _active = false;
+    _handsFree = false;
+    _wake.stop();
     _mic.dispose();
     _player.dispose();
     _tts.stop();
@@ -103,6 +165,7 @@ class _TalkScreenState extends State<TalkScreen> {
       await _stopAll();
       return;
     }
+    await _wake.stop();
     _active = true;
     _noisy = false;
     _empty = 0;
@@ -124,6 +187,7 @@ class _TalkScreenState extends State<TalkScreen> {
       _orb = OrbState.idle;
       _level = 0;
     });
+    Future.delayed(const Duration(milliseconds: 900), _startWake);
   }
 
   Future<void> _listen() async {
@@ -218,6 +282,7 @@ class _TalkScreenState extends State<TalkScreen> {
     if (t.isEmpty) return;
     _typeCtl.clear();
     if (_mic.on) await _mic.stop();
+    await _wake.stop();
     _active = true;
     _viaType = true;
     await _ask(t);
@@ -372,6 +437,13 @@ class _TalkScreenState extends State<TalkScreen> {
                   style: const TextStyle(color: kPrimary, fontSize: 16, fontWeight: FontWeight.w700)),
             ),
           ),
+          if (!_active)
+            TextButton.icon(
+              onPressed: _toggleHandsFree,
+              icon: Icon(_handsFree ? Icons.hearing : Icons.hearing_disabled, color: kPrimary, size: 20),
+              label: Text(_handsFree ? 'Say "Hey Tilda" or tap the mic. Tap here to turn off.' : 'Hands-free is off. Tap to turn on.',
+                  style: const TextStyle(color: kSub, fontSize: 14)),
+            ),
           if (_status.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),

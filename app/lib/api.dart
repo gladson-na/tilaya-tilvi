@@ -93,6 +93,28 @@ class Api {
     return (j['text'] ?? '') as String;
   }
 
+  /// The label text already read, translated again paragraph by paragraph into another language.
+  static Future<String> relabel(String original, String lang) async {
+    final res = await http
+        .post(Uri.parse('$base/relabel'),
+            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'original': original, 'lang': lang}))
+        .timeout(const Duration(seconds: 60));
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    if (j['error'] != null) throw Exception('${j['error']}');
+    return (j['text'] ?? '') as String;
+  }
+
+  /// A spoken question about the photographed product: price, ingredients, anything on the web.
+  static Future<String> ask(String question, String label, String lang) async {
+    final res = await http
+        .post(Uri.parse('$base/ask'),
+            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'question': question, 'label': label, 'lang': lang}))
+        .timeout(const Duration(seconds: 60));
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    if (j['error'] != null) throw Exception('${j['error']}');
+    return (j['text'] ?? '') as String;
+  }
+
   /// A photo of text (sign, medicine strip, bill): its words and their translation.
   static Future<Map<String, dynamic>> readPhoto(String imageB64, String lang) async {
     final res = await http

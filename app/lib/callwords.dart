@@ -195,8 +195,10 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
         Wrap(spacing: 10, runSpacing: 10, children: [
           for (final e in CallWords.options.entries)
             FilterChip(
-              avatar: widget.style.callTrained.contains(e.key) ? const Icon(Icons.check_circle, color: kPrimary, size: 22) : null,
-              label: Text('${e.value} Tilda', style: const TextStyle(fontSize: 19)),
+              avatar: widget.style.callTrained.contains(e.key) ? Icon(Icons.check_circle, color: _picked.contains(e.key) ? Colors.white : kPrimary, size: 22) : null,
+              label: Text('${e.value} Tilda', style: TextStyle(fontSize: 19, color: _picked.contains(e.key) ? Colors.white : kInk)),
+              showCheckmark: false,
+              selectedColor: kPrimary,
               selected: _picked.contains(e.key),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
               onSelected: (v) => setState(() => v ? _picked.add(e.key) : _picked.remove(e.key)),

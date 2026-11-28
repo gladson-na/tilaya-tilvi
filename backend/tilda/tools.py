@@ -227,13 +227,65 @@ def clean_tail(text: str) -> str:
     return t
 
 
-def read_image(image_b64: str, lang_name: str) -> dict:
-    """Reads the text in a photo and translates it. Returns {"original": ..., "text": translation in lang_name}."""
+def clean_label(text: str) -> str:
+    """Photo readers sometimes loop ("*No Added" three times). Keeps each real line once and drops empty paragraphs."""
+    seen, out = set(), []
+    for para in re.split(r"\n\s*\n", text or ""):
+        keep = []
+        for line in (l.strip() for l in para.split("\n")):
+            key = re.sub(r"\W+", "", line).lower()
+            if not key:
+                continue
+            if len(key) >= 6:
+                if key in seen:
+                    continue
+                seen.add(key)
+            keep.append(line)
+        if keep:
+            out.append("\n".join(keep))
+    return "\n\n".join(out)
+
+
+_PALM_RE = re.compile(r"palm\s*(?:oil|olein|kernel)|palmolein|पाम", re.I)
+_INGR_RE = re.compile(r"ingredients?|contains?|सामग्री|साहित्य", re.I)
+
+
+def label_facts(original: str) -> str:
+    """One plain fact about the label, only when the ingredients are really in the photo. No opinions."""
+    if not _INGR_RE.search(original or ""):
+        return ""
+    if _PALM_RE.search(original):
+        return "Palm oil: listed in the ingredients."
+    return "Palm oil: not listed in the ingredients that could be read."
+
+
+def _faithful(original: str, target_lang: str, lang_name: str) -> str:
+    """Translates the exact label text paragraph by paragraph, so words like 'vegetarian' cannot drift. Empty on failure."""
+    from .translate import translate, TranslateError
+    from concurrent.futures import ThreadPoolExecutor
+    paras = [p for p in re.split(r"\n\s*\n", original) if p.strip()]
+    if not paras:
+        return ""
+
+    def one(p):
+        return translate(p.replace("\n", ". "), "auto", target_lang).strip()
+    try:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            return "\n\n".join(ex.map(one, paras)).strip()
+    except (TranslateError, Exception) as e:  # any failure: the caller falls back to the reader's own translation
+        log.warning("faithful translate failed: %s", e)
+        return ""
+
+
+def read_image(image_b64: str, lang_name: str, lang: str = "en-IN") -> dict:
+    """Reads the text in a photo and translates it. Returns {"original": ..., "text": translation in lang_name, "facts": ...}."""
     if not os.environ.get("GROQ_API_KEY"):
         raise ToolError("key not set: add GROQ_API_KEY to read photos")
-    prompt = (f"Read all the text you can see in this photo (a sign, a medicine strip, a bill, a board, a page). "
+    prompt = (f"Read all the text you can see in this photo (a sign, a medicine strip, a food label, a bill, a board, a page). "
               f"Reply with JSON only: {{\"original\": the text exactly as written, \"translation\": that text translated into {lang_name}, "
               "written the way a person would say it out loud, short and clear}. If a medicine or label has numbers, keep them exact. "
+              "Never repeat a line, and never invent words. If a line is cut off, curved, blurry or too small, write only the words you can truly read "
+              "and then [unclear]. Do not guess. "
               "Put the headline or title first, on its own line. Separate each paragraph with a blank line, and keep the same paragraphs in the translation. "
               "If there is no readable text, use empty strings.")
     msgs = [{"role": "user", "content": [
@@ -244,7 +296,41 @@ def read_image(image_b64: str, lang_name: str) -> dict:
         j = _first_json(out)
     except (groq.GroqError, ToolError) as e:
         raise ToolError("could not read the photo just now (" + str(e) + ")")
-    return {"original": str(j.get("original") or "").strip(), "text": str(j.get("translation") or "").strip()}
+    original = clean_label(str(j.get("original") or ""))
+    text = clean_label(str(j.get("translation") or ""))
+    if original and not lang.startswith("en"):
+        text = _faithful(original, lang, lang_name) or text
+    elif original and lang.startswith("en") and sum(c.isascii() for c in original) < 0.9 * len(original):
+        text = _faithful(original, lang, lang_name) or text
+    elif original and lang.startswith("en"):
+        text = original
+    facts = label_facts(original)
+    if facts and not lang.startswith("en"):
+        from .translate import translate, TranslateError
+        try:
+            facts = translate(facts, "en-IN", lang).strip() or facts
+        except (TranslateError, Exception):
+            pass
+    if facts:
+        text = (text + "\n\n" + facts).strip()
+    return {"original": original, "text": text, "facts": facts}
+
+
+def product_answer(question: str, label: str, lang_name: str, where: str = "") -> str:
+    """Answers a question about a product seen in a photo, from the web. Facts only, no health opinions."""
+    if not os.environ.get("GROQ_API_KEY"):
+        raise ToolError("key not set: add GROQ_API_KEY for product answers")
+    sys = ("The user photographed a product and asks about it. The label text (it may be partly misread) is below. "
+           "Find the product on the web and answer in " + lang_name + ", at most four short sentences, plain words, no links, no markdown. "
+           "State facts only: what is listed, where you found a price and roughly what it is (say 'around'), and that prices change. "
+           "Never say a product or ingredient is harmful, safe, toxic or poisonous, and give no medical advice. "
+           "If you cannot confirm something, say you could not confirm it. Today is " + now_text() + "." + where +
+           "\nLABEL TEXT:\n" + (label or "")[:900])
+    msgs = [{"role": "system", "content": sys}, {"role": "user", "content": question}]
+    try:
+        return groq.chat(msgs, groq.WEB_MODELS, max_tokens=450, temperature=0.1, tools=[{"type": "browser_search"}], timeout=40)
+    except groq.GroqError as e:
+        raise ToolError("web search failed (" + str(e) + ")")
 
 
 def context_for(messages, lat=None, lon=None) -> dict:
