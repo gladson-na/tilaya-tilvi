@@ -56,9 +56,9 @@ def system_prompt(lang: str, extra: str = "") -> str:
             "For everyday questions about food, drinks, nutrition, products and prices, give the commonly known facts and typical figures "
             "(say 'around') instead of refusing. For 'is it healthy or safe' questions, give the facts (calories, sugar, caffeine, alcohol, "
             "what the label or official guidance says) and no verdict of your own, and never diagnose or give a medicine dose. "
-            "The person is in India: when you say a price, use rupees (like '299 rupees'), never dollars. "
-            f"The date and time now: {now_text()}. You can only know today's weather, distances and sums from a LIVE DATA line "
-            "in this message. Without one, never invent them: say you could not check.")
+            "The person is most likely in India: when you say a price, use rupees (like '299 rupees'), never dollars, unless a LIVE DATA line names another country, then use that country's currency. "
+            f"The date and time now: {now_text()}. You must never invent live facts, distances, travel times or sums: use only a LIVE DATA line in this message. "
+            "If you have none, say you could not check. Answer only what was asked, and never bring up other topics such as weather.")
     return base + (" " + extra if extra else "")
 
 
@@ -137,13 +137,20 @@ def stream_turn(messages, lang: str, api_key=None, extra: str = "", voice: bool 
              for m in (messages or []) if m.get("role") in ("user", "assistant")][-12:]
     if not turns:
         raise TalkError("nothing to answer")
-    r = requests.post(
-        CHAT_URL,
-        headers={"api-subscription-key": key, "Content-Type": "application/json"},
-        json={"model": CHAT_MODELS[0], "messages": [{"role": "system", "content": system_prompt(lang, extra)}] + turns,
-              "temperature": 0.4, "max_tokens": 300, "reasoning_effort": None, "stream": True},
-        timeout=40, stream=True,
-    )
+    try:
+        r = requests.post(
+            CHAT_URL,
+            headers={"api-subscription-key": key, "Content-Type": "application/json"},
+            json={"model": CHAT_MODELS[0], "messages": [{"role": "system", "content": system_prompt(lang, extra)}] + turns,
+                  "temperature": 0.4, "max_tokens": 300, "reasoning_effort": None, "stream": True},
+            timeout=(10, 25), stream=True,
+        )
+    except requests.RequestException as e:  # timeout or no connection: the backup brain answers
+        try:
+            yield {"text": groq_reply(messages, lang, extra), "error": f"sarvam chat {type(e).__name__}, answered by groq"}
+            return
+        except TalkError as e2:
+            raise TalkError(f"sarvam chat {type(e).__name__}; backup: {e2}")
     if r.status_code != 200:
         # Sarvam cannot answer (no credits, outage): the backup brain answers, the phone speaks it
         try:
@@ -164,26 +171,34 @@ def stream_turn(messages, lang: str, api_key=None, extra: str = "", voice: bool 
         except TalkError as e:
             return {"text": text, "error": str(e)}
 
-    for raw in r.iter_lines(decode_unicode=True):
-        if not raw or not raw.startswith("data:"):
-            continue
-        data = raw[5:].strip()
-        if data == "[DONE]":
-            break
-        try:
-            buf += json.loads(data)["choices"][0]["delta"].get("content") or ""
-        except (KeyError, IndexError, ValueError):
-            continue
-        parts = _END.split(buf)
-        for sent_text in parts[:-1]:
-            if len(sent_text) >= 12 or sent:
-                item = out(sent_text)
-                if item:
-                    sent += 1
-                    yield item
-            else:
-                parts[-1] = sent_text + " " + parts[-1]
-        buf = parts[-1]
+    try:
+        for raw in r.iter_lines(decode_unicode=True):
+            if not raw or not raw.startswith("data:"):
+                continue
+            data = raw[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                buf += json.loads(data)["choices"][0]["delta"].get("content") or ""
+            except (KeyError, IndexError, ValueError):
+                continue
+            parts = _END.split(buf)
+            for sent_text in parts[:-1]:
+                if len(sent_text) >= 12 or sent:
+                    item = out(sent_text)
+                    if item:
+                        sent += 1
+                        yield item
+                else:
+                    parts[-1] = sent_text + " " + parts[-1]
+            buf = parts[-1]
+    except requests.RequestException as e:  # the stream broke part-way
+        if not sent and not buf.strip():
+            try:
+                yield {"text": groq_reply(messages, lang, extra), "error": f"sarvam stream {type(e).__name__}, answered by groq"}
+                return
+            except TalkError as e2:
+                raise TalkError(f"sarvam stream {type(e).__name__}; backup: {e2}")
     item = out(buf)
     if item:
         yield item

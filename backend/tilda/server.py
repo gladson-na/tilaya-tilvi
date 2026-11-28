@@ -219,7 +219,9 @@ def relabel():
     if os.environ.get("TILDA_FAKE"):
         return jsonify(text="(demo) " + original)
     from .translate import NAMES
-    text = tools._faithful(original, lang, NAMES.get(lang, "English")) if not lang.startswith("en") else original
+    letters = [c for c in original if c.isalpha()]
+    foreign = letters and sum(1 for c in letters if ord(c) > 0x024F) / len(letters) > 0.3  # the label is not in Latin script
+    text = tools._faithful(original, lang, NAMES.get(lang, "English")) if (not lang.startswith("en") or foreign) else original
     if not text:
         return jsonify(error="could not translate just now"), 502
     facts = tools.label_facts(original)

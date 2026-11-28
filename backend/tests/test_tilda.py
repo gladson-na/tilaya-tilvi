@@ -578,7 +578,7 @@ def test_clean_tail_drops_invented_hello_only_after_a_full_sentence():
 
 
 def test_live_questions_get_web_answer(monkeypatch):
-    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="": "Petrol is about 100 rupees a litre in Bhubaneswar today.")
+    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="", cc="": "Petrol is about 100 rupees a litre in Bhubaneswar today.")
     out = tools.context_for([{"role": "user", "content": "what is the petrol price today"}])
     assert out["intent"] == "live" and "Petrol" in out["extra"]
 
@@ -777,11 +777,11 @@ def test_rotating_fake_addresses_hit_the_global_limit(monkeypatch):
 
 def test_nearby_question_uses_web_with_location(monkeypatch):
     seen = {}
-    def fake(q, n="English", where=""):
+    def fake(q, n="English", where="", cc=""):
         seen["q"], seen["where"] = q, where
         return "Nearest hospital: City Care, 1 km."
     monkeypatch.setattr(tools, "web_answer", fake)
-    monkeypatch.setattr(tools, "place_name", lambda a, b: "Mira Road, Thane")
+    monkeypatch.setattr(tools, "geo_info", lambda a, b: ("Mira Road, Thane", "in"))
     out = tools.context_for([{"role": "user", "content": "which is the closest hospital"}], 19.28, 72.87)
     assert out["intent"] == "live" and "City Care" in out["extra"]
     assert "19.2800" in seen["where"] and "Mira Road" in seen["where"]
@@ -789,7 +789,7 @@ def test_nearby_question_uses_web_with_location(monkeypatch):
 
 def test_short_follow_up_keeps_the_earlier_question(monkeypatch):
     seen = {}
-    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="": seen.setdefault("q", q) or "ok")
+    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="", cc="": seen.setdefault("q", q) or "ok")
     tools.context_for([{"role": "user", "content": "which is the closest hospital"},
                        {"role": "assistant", "content": "Which area are you in?"},
                        {"role": "user", "content": "I am at Mira Road near the station"}])
@@ -797,7 +797,7 @@ def test_short_follow_up_keeps_the_earlier_question(monkeypatch):
 
 
 def test_without_location_it_asks_the_area(monkeypatch):
-    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="": "Some answer")
+    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="", cc="": "Some answer")
     out = tools.context_for([{"role": "user", "content": "nearest pharmacy open now"}])
     assert "which area" in out["extra"]
 
@@ -854,7 +854,7 @@ def test_relabel_route(monkeypatch):
 
 
 def test_calorie_question_goes_to_the_web_not_the_calculator(monkeypatch):
-    monkeypatch.setattr(tools, "web_answer", lambda q, lang_name="English", where="": "about 286 kcal")
+    monkeypatch.setattr(tools, "web_answer", lambda q, lang_name="English", where="", cc="": "about 286 kcal")
     out = tools.context_for([{"role": "user", "content": "May I know how much Kingfisher Strong beer contains the calorie?"}])
     assert out["intent"] == "live" and "286" in out["extra"]
 
@@ -875,7 +875,7 @@ def test_distance_reads_the_place_when_the_model_is_down(monkeypatch):
         status_code = 200
         def json(self): return {"routes": [{"distance": 2300, "duration": 180}]}
     monkeypatch.setattr(tools.requests, "get", lambda *a, **k: R())
-    assert "2.3 km" in tools.distance(18.94, 72.83, "Okay, how far is Churchgate from here?")
+    assert "2.3 km" in tools.distance(18.94, 72.83, "Okay, how far is Churchgate from here?")[0]
     assert seen["p"] == "Churchgate"
 
 
@@ -885,7 +885,7 @@ def test_distance_reads_the_place_when_the_model_is_down(monkeypatch):
     "how many calories in a Coke", "how much sugar is in Pepsi", "what is the MRP of Dairy Milk", "what are the side effects of paracetamol",
 ])
 def test_everyday_product_and_health_questions_reach_the_web(monkeypatch, q):
-    monkeypatch.setattr(tools, "web_answer", lambda qq, lang_name="English", where="": "WEB")
+    monkeypatch.setattr(tools, "web_answer", lambda qq, lang_name="English", where="", cc="": "WEB")
     assert tools.context_for([{"role": "user", "content": q}], 18.9, 72.8)["intent"] == "live"
 
 
@@ -902,3 +902,92 @@ def test_prices_are_asked_for_in_rupees(monkeypatch):
     tools.web_answer("what is the price of Amul milk")
     tools.product_answer("current price?", "AMUL MILK", "English")
     assert len(seen) == 2 and all("rupees" in s and "Never give dollars" in s for s in seen)
+
+
+def test_distance_answer_has_transit_no_weather_and_names_traffic(monkeypatch):
+    monkeypatch.setattr(tools, "distance", lambda a, b, t: ("Road distance: about 47 km, around 85 minutes by car with no traffic.", "Churchgate"))
+    monkeypatch.setattr(tools, "geo_info", lambda a, b: ("Vasai, Palghar", "in"))
+    seen = {}
+    def fake(q, n="English", where="", cc=""):
+        seen["q"], seen["cc"] = q, cc
+        return "The fast local from Vasai Road to Churchgate takes about 70 minutes, scheduled."
+    monkeypatch.setattr(tools, "web_answer", fake)
+    out = tools.context_for([{"role": "user", "content": "how far is Churchgate"}], 19.4, 72.8)
+    assert out["intent"] == "distance" and "fast local" in out["extra"] and "no traffic" in out["extra"]
+    assert "Do not mention weather" in out["extra"] and "Churchgate" in seen["q"] and seen["cc"] == "in"
+
+
+def test_distance_still_answers_when_transit_lookup_fails(monkeypatch):
+    monkeypatch.setattr(tools, "distance", lambda a, b, t: ("Road distance: 5 km.", "Shibuya"))
+    monkeypatch.setattr(tools, "geo_info", lambda a, b: ("Tokyo", "jp"))
+    def boom(*a, **k):
+        raise tools.ToolError("down")
+    monkeypatch.setattr(tools, "web_answer", boom)
+    out = tools.context_for([{"role": "user", "content": "how far is Shibuya"}], 35.6, 139.7)
+    assert "5 km" in out["extra"] and "could not be checked" in out["extra"]
+
+
+def test_money_follows_the_country():
+    assert "rupees" in tools.money_rule("in") and "rupees" in tools.money_rule("")
+    m = tools.money_rule("jp")
+    assert "JP" in m and "Indian rupees" not in m
+
+
+# ---- a wide set of everyday and world questions: each must reach the right tool, so nothing is answered from memory by mistake
+WIDE={
+"live":["who won the IPL match yesterday","IPL points table","India vs Australia score","petrol price today","gold rate today","dollar to rupee today","Bitcoin price now","Sensex today","latest news","air quality near me","is there traffic near Andheri","nearest petrol pump","closest ATM","best restaurant near me","pharmacy open now","train status of 12951","next metro from Indiranagar to MG Road","Bangalore weather this week","what is the weather in Tokyo","flight from Dubai to London price","how do I get from Heathrow to central London","London Tube fare","New York subway hours","who is the prime minister of Japan","who is the CEO of Google","when is Diwali this year","Ola cab fare to airport","Zomato offers today","cricket world cup winner","election results","earthquake today","rain forecast Delhi","how much is a Big Mac in India","cheapest phone under 15000","iPhone 16 price in India","Aadhaar update how to","how to apply for PAN card","how to renew passport","GST rate on restaurants","current repo rate","what is the price of tomatoes today","how many calories in a samosa","is Maggi healthy","how much sugar in Coke","is Dettol safe for kids","what are the side effects of cetirizine","how many protein in an egg","is it ok to eat banana at night","what is the capital of Peru","who built the Taj Mahal","how tall is Mount Everest","what is photosynthesis","how does a vaccine work","what is inflation","how to make tea","how to tie a tie","how to lose weight","what is GDP of India","population of India","how far is the moon","when did India get independence","who invented the telephone","what is the speed of light","how do I open a bank account","how to fill a cheque","how to book a train ticket on IRCTC","how to book a doctor appointment","best time to visit Goa","things to do in Bangalore","visa for Dubai from India","hotels in Paris","how do I reach Majestic from Whitefield by metro","BMTC bus to airport","what to eat in Chennai","Kolkata metro timings"],
+"none":["tell me a joke","hello","thank you","good morning","how are you","tell me a story","write me a poem","what time is it","translate good morning to Hindi","sing a song","I am sad","you are great","say hello in Tamil","who are you","what can you do","bye"],
+"calc":["what is 25 times 4","12 plus 30","divide 100 by 8","total of 250 and 399 and 40","15 percent of 2000"],
+"distance":["how far is Churchgate","distance to the airport","how long to reach Gateway of India","how far is Majestic from here","how far is Heathrow"],
+"weather":["what is the weather","will it rain today","temperature now"],
+}
+
+
+import itertools
+@pytest.mark.parametrize("exp,q", list(itertools.chain.from_iterable(((k, q) for q in v) for k, v in WIDE.items())))
+def test_wide_question_set_routes_correctly(monkeypatch, exp, q):
+    monkeypatch.setattr(tools, "web_answer", lambda qq, n="English", where="", cc="": "WEB")
+    monkeypatch.setattr(tools, "distance", lambda a, b, t: ("ROAD", "X"))
+    monkeypatch.setattr(tools, "weather", lambda a, b: "W")
+    monkeypatch.setattr(tools, "calculate", lambda t: "5")
+    monkeypatch.setattr(tools, "geo_info", lambda a, b: ("Place", "in"))
+    got = tools.context_for([{"role": "user", "content": q}], 12.9, 77.6)["intent"]
+    assert (got is None) if exp == "none" else (got in ("live", "distance", "weather") if exp == "live" else got == exp)
+
+
+@pytest.mark.parametrize("label,expect", [
+    ("Ingredients: wheat flour, no palm oil, salt", "none"),
+    ("Ingredients: wheat flour, palm oil free, salt", "none"),
+    ("Ingredients: flour, palm oil, salt", "listed in"),
+    ("Ingredients: flour, salt", "not listed"),
+])
+def test_palm_oil_negation(label, expect):
+    assert expect in tools.label_facts(label)
+
+
+def test_summary_keeps_every_part_of_a_very_long_talk(monkeypatch):
+    seen = []
+    monkeypatch.setattr(tools, "_llm_text", lambda msgs, **k: seen.append(msgs[-1]["content"]) or "- note")
+    text = ("Alpha sentence goes here. " * 4000) + "THE-END-MARKER."  # ~104k characters, more than 8 x 10k
+    tools.summarize(text, "English")
+    assert any("THE-END-MARKER" in s for s in seen)
+
+
+def test_talk_stream_falls_back_when_sarvam_times_out(monkeypatch):
+    from tilda import talk
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    def slow(*a, **k):
+        raise talk.requests.Timeout("slow")
+    monkeypatch.setattr(talk.requests, "post", slow)
+    monkeypatch.setattr(talk, "groq_reply", lambda m, l, e: "backup answer")
+    out = list(talk.stream_turn([{"role": "user", "content": "hi"}], "en-IN"))
+    assert out and out[0]["text"] == "backup answer"
+
+
+def test_relabel_translates_a_hindi_label_even_for_english(monkeypatch):
+    from tilda import server
+    monkeypatch.delenv("TILDA_FAKE", raising=False)
+    monkeypatch.setattr(tools, "_faithful", lambda o, l, n: "TRANSLATED")
+    c = server.app.test_client()
+    r = c.post("/relabel", json={"original": "सामग्री: गेहूं का आटा, नमक", "lang": "en-IN"})
+    assert r.get_json()["text"].startswith("TRANSLATED")
