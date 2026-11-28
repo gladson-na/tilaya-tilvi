@@ -22,6 +22,11 @@ class NotesScreen extends StatefulWidget {
   State<NotesScreen> createState() => _NotesScreenState();
 }
 
+/// The buttons on the floating strip (over YouTube, Meet or Zoom) reach this screen through here.
+class NotesCtl {
+  static Future<void> Function(String)? handler;
+}
+
 class _NotesScreenState extends State<NotesScreen> {
   final _mic = Mic(clean: false);
   bool _internal = false; // recording the phone's own sound instead of the microphone
@@ -29,6 +34,9 @@ class _NotesScreenState extends State<NotesScreen> {
   Timer? _lvlT;
   Timer? _cut;
   bool _on = false;
+  bool _paused = false;
+  DateTime _pausedAt = DateTime.now();
+  int _epoch = 0; // bumped on Cancel so a piece that was still being sent is thrown away
   DateTime _startedAt = DateTime.now();
   bool _quiet = false;
   int _tab = 0;
@@ -55,15 +63,71 @@ class _NotesScreenState extends State<NotesScreen> {
   void initState() {
     super.initState();
     unawaited(Api.wake());
+    NotesCtl.handler = _onCtl;
   }
 
   @override
   void dispose() {
+    if (NotesCtl.handler == _onCtl) NotesCtl.handler = null;
     _cut?.cancel();
     _lvlT?.cancel();
     _mic.dispose();
     if (_on) _service(false);
     super.dispose();
+  }
+
+  Future<void> _onCtl(String what) async {
+    if (!_on) return;
+    if (what == 'pause') _setPaused(true, fromStrip: true);
+    if (what == 'resume') _setPaused(false, fromStrip: true);
+    if (what == 'stop') await _stop();
+    if (what == 'cancel') await _cancel();
+  }
+
+  void _setPaused(bool p, {bool fromStrip = false}) {
+    if (!_on || p == _paused) return;
+    if (p) {
+      _pausedAt = DateTime.now();
+    } else {
+      _startedAt = _startedAt.add(DateTime.now().difference(_pausedAt)); // paused time does not count towards the demo limit
+      _lastLoud = DateTime.now();
+    }
+    _set(() {
+      _paused = p;
+      _quiet = false;
+      _status = p ? 'Paused. Nothing is being written.' : 'Listening. Notes are being written.';
+    });
+    if (!fromStrip && Platform.isAndroid) {
+      _native.invokeMethod('notesPaused', p).catchError((_) {});
+    }
+  }
+
+  /// Throws the recording away: nothing is summarised and nothing stays in Saved.
+  Future<void> _cancel() async {
+    _epoch++;
+    _cut?.cancel();
+    _lvlT?.cancel();
+    try {
+      if (_internal) {
+        await _rotate();
+      } else {
+        await _mic.stop();
+      }
+    } catch (_) {}
+    await _service(false);
+    _waiting.clear();
+    for (final it in List<SavedItem>.of(Store.items)) {
+      if (it.id == _id) await Store.remove(it);
+    }
+    _id = Store.newId();
+    _set(() {
+      _on = false;
+      _paused = false;
+      _quiet = false;
+      _summarising = false;
+      _spoken = _lettersText = _meaningText = _summary = '';
+      _status = 'Recording cancelled. Nothing was kept.';
+    });
   }
 
   Future<void> _service(bool on) async {
@@ -105,10 +169,11 @@ class _NotesScreenState extends State<NotesScreen> {
       _id = Store.newId();
       _spoken = _lettersText = _meaningText = '';
     }
+    _paused = false;
     _lastLoud = DateTime.now();
     _startedAt = DateTime.now();
     _cut = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (_on && !Api.noLimit && DateTime.now().difference(_startedAt).inSeconds >= Api.demoMinutes * 60) {
+      if (_on && !_paused && !Api.noLimit && DateTime.now().difference(_startedAt).inSeconds >= Api.demoMinutes * 60) {
         final m = ScaffoldMessenger.maybeOf(context);
         m?.showSnackBar(SnackBar(
           duration: const Duration(seconds: 12),
@@ -139,6 +204,7 @@ class _NotesScreenState extends State<NotesScreen> {
 
   void _onLevel(double l) {
     _lvl = l;
+    if (_paused) return;
     if (l > 0.006) _lastLoud = DateTime.now();
     final q = DateTime.now().difference(_lastLoud).inSeconds > 15;
     if (q != _quiet && mounted) {
@@ -152,6 +218,16 @@ class _NotesScreenState extends State<NotesScreen> {
   /// Every 10 to 20 seconds (waiting for a pause in the talking) the recording so far is sent off and a new one starts.
   Future<void> _slice() async {
     if (!(_internal || _mic.on) || _rotating) return;
+    if (_paused) {
+      // keep emptying the buffer, but throw the sound away
+      _rotating = true;
+      try {
+        await _rotate();
+      } finally {
+        _rotating = false;
+      }
+      return;
+    }
     final t = _secs;
     if (t < 10 || (t < 20 && _lvl > 0.03)) return;
     _rotating = true;
@@ -172,8 +248,10 @@ class _NotesScreenState extends State<NotesScreen> {
     try {
       while (_waiting.isNotEmpty && mounted) {
         final wav = _waiting.first;
+        final ep = _epoch;
         try {
           final j = await Api.transcribe(wav, 'auto', widget.style.myLangs.toList(), fast: true, ext: (wav.length > 4 && wav[0] == 0x52 && wav[1] == 0x49) ? 'wav' : _mic.ext);
+          if (ep != _epoch) continue; // cancelled while this piece was on its way
           _waiting.removeAt(0);
           final text = ((j['text'] ?? '') as String).trim();
           final lang = (j['language'] ?? 'auto') as String;
@@ -257,10 +335,12 @@ class _NotesScreenState extends State<NotesScreen> {
   Future<void> _stop() async {
     _cut?.cancel();
     _lvlT?.cancel();
-    final rest = _internal ? await _rotate() : await _mic.stop();
+    var rest = _internal ? await _rotate() : await _mic.stop();
+    if (_paused) rest = Uint8List(0);
     await _service(false);
     if (rest.length > 600) _waiting.add(rest);
     _set(() {
+      _paused = false;
       _on = false;
       _quiet = false;
       _summarising = true;
@@ -317,6 +397,21 @@ class _NotesScreenState extends State<NotesScreen> {
     } finally {
       _set(() => _summarising = false);
     }
+  }
+
+  Future<void> _confirmCancel() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete this recording?'),
+        content: const Text('Nothing will be kept.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep recording')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true) await _cancel();
   }
 
   Future<void> _toBackground() async {
@@ -414,6 +509,29 @@ class _NotesScreenState extends State<NotesScreen> {
               const SizedBox(height: 8),
               if (!_on && !_summarising && _spoken.trim().length >= 20 && _summary.isEmpty)
                 TextButton.icon(onPressed: _makeSummary, icon: const Icon(Icons.auto_awesome), label: const Text('Make summary')),
+              if (_on)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _setPaused(!_paused),
+                        icon: Icon(_paused ? Icons.play_arrow : Icons.pause),
+                        label: Text(_paused ? 'Resume' : 'Pause', style: const TextStyle(fontSize: 17)),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _confirmCancel,
+                        icon: const Icon(Icons.close),
+                        label: const Text('Cancel', style: TextStyle(fontSize: 17)),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52), foregroundColor: const Color(0xFFB3261E)),
+                      ),
+                    ),
+                  ]),
+                ),
               if (_on)
                 OutlinedButton.icon(
                   onPressed: _toBackground,

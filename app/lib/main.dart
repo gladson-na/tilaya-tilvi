@@ -229,6 +229,7 @@ class _HomePageState extends State<HomePage> {
         }
         if (c.method == 'toggle') _bubbleToggle();
         if (c.method == 'longpress') _nextLiveLang();
+        if (c.method == 'notesCtl') await NotesCtl.handler?.call(c.arguments as String);
       });
     }
     _tts.awaitSpeakCompletion(true);

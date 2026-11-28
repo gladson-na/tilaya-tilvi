@@ -22,7 +22,15 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.view.WindowManager
 import android.animation.ValueAnimator
 import java.io.ByteArrayOutputStream
@@ -37,6 +45,11 @@ class NotesService : Service() {
         @Volatile var level = 0.0
         @Volatile var capturing = false
         @Volatile var notesRunning = false
+        /** Told to the app: "pause", "resume", "stop" or "cancel". Null when the app screen is gone. */
+        @Volatile var onControl: ((String) -> Unit)? = null
+        @Volatile var instance: NotesService? = null
+        /** The app changed pause by itself (its own button): keep the floating strip in step. */
+        fun syncPaused(p: Boolean) { instance?.let { s -> Handler(Looper.getMainLooper()).post { s.paintPaused(p) } } }
         fun take(): ByteArray = synchronized(buf) { val b = buf.toByteArray(); buf.reset(); b }
     }
 
@@ -45,6 +58,24 @@ class NotesService : Service() {
     private var worker: Thread? = null
     private var glow: GlowView? = null
     private var anim: ValueAnimator? = null
+    private var bar: LinearLayout? = null
+    private var barLp: WindowManager.LayoutParams? = null
+    private var pauseBtn: TextView? = null
+    private var cancelBtn: TextView? = null
+    private var clock: TextView? = null
+    private var paused = false
+    private var runStart = 0L
+    private var elapsedMs = 0L
+    private val ui = Handler(Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            if (!paused) {
+                val sec = ((elapsedMs + System.currentTimeMillis() - runStart) / 1000).toInt()
+                clock?.text = String.format("%02d:%02d", sec / 60, sec % 60)
+            }
+            ui.postDelayed(this, 1000)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -73,7 +104,8 @@ class NotesService : Service() {
             startForeground(7, n, if (wantCapture || capturing) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } else startForeground(7, n)
         if (wantCapture && !capturing) startCapture(code, data!!)
-        if (!micOnly) showGlow()
+        instance = this
+        if (!micOnly) { showGlow(); showControls() }
         return START_STICKY
     }
 
@@ -130,8 +162,8 @@ class NotesService : Service() {
         private val p = Paint()
         override fun onDraw(cv: Canvas) {
             val w = width.toFloat(); val h = height.toFloat(); val t = 110f
-            val col = ((a * 200).toInt() shl 24) or 0x2979FF
-            val none = 0x002979FF
+            val col = ((a * 200).toInt() shl 24) or 0x2FB59A
+            val none = 0x002FB59A
             fun edge(x0: Float, y0: Float, x1: Float, y1: Float, l: Float, tp: Float, r: Float, b: Float) {
                 p.shader = LinearGradient(x0, y0, x1, y1, col, none, Shader.TileMode.CLAMP)
                 cv.drawRect(l, tp, r, b, p)
@@ -141,6 +173,108 @@ class NotesService : Service() {
             edge(0f, 0f, t, 0f, 0f, 0f, t, h)
             edge(w, 0f, w - t, 0f, w - t, 0f, w, h)
         }
+    }
+
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun pill(label: String, fill: Int, onTap: () -> Unit): TextView = TextView(this).apply {
+        text = label
+        setTextColor(Color.WHITE)
+        textSize = 15f
+        gravity = Gravity.CENTER
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(22).toFloat() }
+        contentDescription = label
+        setOnClickListener { onTap() }
+    }
+
+    private fun paintPaused(p: Boolean) {
+        if (p == paused) return
+        val now = System.currentTimeMillis()
+        if (p) elapsedMs += now - runStart else runStart = now
+        paused = p
+        pauseBtn?.text = if (p) "Resume" else "Pause"
+        if (p) clock?.text = "Paused"
+    }
+
+    private var cancelArmed = false
+
+    private fun send(what: String) {
+        val cb = onControl
+        if (cb != null) { try { cb(what) } catch (e: Exception) {} }
+        else {
+            // the app screen is gone: Stop and Cancel just end the recording, and Stop reopens the app
+            if (what == "stop" || what == "cancel") {
+                if (what == "stop") packageManager.getLaunchIntentForPackage(packageName)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                stopSelf()
+            }
+        }
+    }
+
+    private fun showControls() {
+        if (bar != null) return
+        if (!Settings.canDrawOverlays(this)) return
+        try {
+            val teal = 0xFF0B6B5A.toInt()
+            val bg = GradientDrawable().apply { setColor(0xEE0E1A17.toInt()); cornerRadius = dp(30).toFloat() }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = bg
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+            }
+            val handle = TextView(this).apply {
+                text = "::"; setTextColor(0xFF8FB8AC.toInt()); textSize = 20f
+                setPadding(dp(6), 0, dp(10), 0)
+                contentDescription = "Drag"
+            }
+            clock = TextView(this).apply { text = "00:00"; setTextColor(Color.WHITE); textSize = 16f; setPadding(0, 0, dp(10), 0) }
+            pauseBtn = pill("Pause", teal) {
+                val next = !paused
+                paintPaused(next)
+                send(if (next) "pause" else "resume")
+            }
+            val stop = pill("Stop", 0xFF2D7D6E.toInt()) { send("stop") }
+            cancelBtn = pill("Cancel", 0xFF8A2B25.toInt()) {
+                if (!cancelArmed) {
+                    cancelArmed = true
+                    cancelBtn?.text = "Delete?"
+                    ui.postDelayed({ cancelArmed = false; cancelBtn?.text = "Cancel" }, 3000)
+                } else {
+                    cancelArmed = false
+                    send("cancel")
+                }
+            }
+            row.addView(handle); row.addView(clock)
+            row.addView(pauseBtn, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            row.addView(stop, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            row.addView(cancelBtn)
+            val lp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT)
+            lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            lp.y = dp(70)
+            // drag by the handle
+            var sy = 0f; var sx = 0f; var oy = 0; var ox = 0
+            handle.setOnTouchListener { _, e ->
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; ox = lp.x; oy = lp.y; true }
+                    MotionEvent.ACTION_MOVE -> {
+                        lp.x = ox + (e.rawX - sx).toInt(); lp.y = oy + (e.rawY - sy).toInt()
+                        try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(row, lp) } catch (x: Exception) {}
+                        true
+                    }
+                    else -> true
+                }
+            }
+            (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(row, lp)
+            bar = row; barLp = lp
+            runStart = System.currentTimeMillis(); elapsedMs = 0L
+            ui.post(tick)
+        } catch (e: Exception) { bar = null }
     }
 
     private fun showGlow() {
@@ -166,6 +300,10 @@ class NotesService : Service() {
 
     override fun onDestroy() {
         notesRunning = false
+        instance = null
+        ui.removeCallbacksAndMessages(null)
+        try { bar?.let { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } } catch (e: Exception) {}
+        bar = null
         capturing = false
         try { worker?.join(300) } catch (e: Exception) {}
         try { rec?.stop(); rec?.release() } catch (e: Exception) {}

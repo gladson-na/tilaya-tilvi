@@ -31,6 +31,7 @@ class MainActivity : FlutterActivity() {
         TildaService.onFocus = { f -> ch.invokeMethod("focus", f) }
         TildaService.onTap = { ch.invokeMethod("toggle", null) }
         TildaService.onLongPress = { ch.invokeMethod("longpress", null) }
+        NotesService.onControl = { what -> runOnUiThread { ch.invokeMethod("notesCtl", what) } }
         ch.setMethodCallHandler { call, res ->
             when (call.method) {
                 "insert" -> res.success(TildaService.insert(call.arguments as String))
@@ -57,6 +58,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "captureTake" -> res.success(NotesService.take())
                 "captureLevel" -> res.success(NotesService.level)
+                "notesPaused" -> { NotesService.syncPaused(call.arguments as Boolean); res.success(true) }
                 "notesOff" -> { stopService(Intent(this, NotesService::class.java)); res.success(true) }
                 "toBack" -> { moveTaskToBack(true); res.success(true) }
                 "settings" -> {
@@ -72,6 +74,7 @@ class MainActivity : FlutterActivity() {
         TildaService.onFocus = null
         TildaService.onTap = null
         TildaService.onLongPress = null
+        NotesService.onControl = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }
