@@ -509,7 +509,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(14)),
-                  child: const Text('Please double-check medicine names, doses and numbers against the original.', style: TextStyle(color: kInk, fontSize: 15, height: 1.35)),
+                  child: const Text('Small print can be misread. Check important names and numbers against the original.', style: TextStyle(color: kInk, fontSize: 15, height: 1.35)),
                 ),
               ],
             ]),

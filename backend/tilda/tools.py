@@ -199,6 +199,13 @@ def place_name(lat: float, lon: float) -> str:
     return name
 
 
+LAST_ERR: dict = {}
+
+
+def note_err(kind: str, e) -> None:
+    LAST_ERR[kind] = f"{now_text()}: {type(e).__name__}: {e}"[:300]
+
+
 def web_answer(question: str, lang_name: str = "English", where: str = "") -> str:
     """A short, checked answer from the live web (Groq's browser search on gpt-oss). Raises ToolError when it cannot."""
     if not os.environ.get("GROQ_API_KEY"):
@@ -207,8 +214,17 @@ def web_answer(question: str, lang_name: str = "English", where: str = "") -> st
              "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "." + where},
             {"role": "user", "content": question}]
     try:
-        return groq.chat(msgs, groq.WEB_MODELS, max_tokens=350, temperature=0.1, tools=[{"type": "browser_search"}], timeout=35)
+        return groq.chat(msgs, groq.WEB_MODELS, max_tokens=350, temperature=0.1, tools=[{"type": "browser_search"}], timeout=30)
     except groq.GroqError as e:
+        note_err("web", e)
+    # live search failed: answer from what the model knows, and say so, rather than giving up
+    try:
+        plain = [{"role": "system", "content": "Answer in at most three short sentences, plain words, no links, no markdown. "
+                  "Live search is down, so say that this is from general knowledge and may be out of date, and give a typical figure or range if you know one. "
+                  "If you do not know, say so. Today is " + now_text() + "." + where}, {"role": "user", "content": question}]
+        return groq.chat(plain, groq.TEXT_MODELS, max_tokens=250, temperature=0.1, timeout=20)
+    except groq.GroqError as e:
+        note_err("web_plain", e)
         raise ToolError("web search failed (" + str(e) + ")")
 
 
@@ -374,6 +390,7 @@ def context_for(messages, lat=None, lon=None) -> dict:
             return {"intent": "calc", "extra": "LIVE DATA: " + calculate(last)}
     except (ToolError, requests.RequestException) as e:
         log.warning("tool failed: %s", e)
+        note_err("context", e)
         return {"intent": "failed", "extra": "LIVE DATA: the lookup failed just now. Say you could not check it right now and offer to try again. Do not guess."}
     return {"intent": None, "extra": ""}
 

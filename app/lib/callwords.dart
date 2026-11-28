@@ -19,14 +19,14 @@ class CallWords {
   };
 
   // Speech engines write the name many ways: Tilda, Tilde, Telda, Hilda, टिल्डा, तिल्दा ...
-  static const _name = r'(?:t[iyeu]l[dt][aeu]r?|hilda|[टत]िल्?[डद][ाेा]?)';
+  static const _name = r'(?:[td][iyeu]l+[dt]?[aeu]r?|hilda|hilder|[टत]िल्?[डद][ाेा]?)';
   static const _calls = r'(?:hey|hi|hello|ae|ay|aye|eh|a|oye|oi|o|oh|arre|are|suno|ok|okay|हे|हेलो|ए|ऐ|ओय|ओ|अरे|सुनो|ओके)';
 
   static RegExp _re(PersonalStyle s) {
     final learned = s.callHeard.where((e) => e.trim().isNotEmpty).map((e) => RegExp.escape(e.trim().toLowerCase())).toList()
       ..sort((a, b) => b.length.compareTo(a.length));
     final heard = learned.isEmpty ? '' : '(?:${learned.join('|')})|';
-    return RegExp('^\\s*(?:$heard(?:$_calls[\\s,.!?-]+)?$_name)(?=[\\s,.!?-]|\$)[\\s,.!?-]*', caseSensitive: false, unicode: true);
+    return RegExp('^\\s*(?:\\S+\\s+)?(?:$heard(?:$_calls[\\s,.!?-]+)?$_name)(?=[\\s,.!?-]|\$)[\\s,.!?-]*', caseSensitive: false, unicode: true);
   }
 
   /// True when the sentence starts with a call-word and Tilda's name.
