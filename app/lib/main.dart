@@ -164,6 +164,7 @@ class _HomePageState extends State<HomePage> {
   String _lastErr = '';  // why the last upload failed, shown instead of a vague 'no network'
   final _asr = OfflineAsr();
   final _style = PersonalStyle();
+  bool _fromSettings = false; // the language or call-word page was opened from Settings, so Back returns to Home
   final _tts = FlutterTts();
   String _target = 'en-IN';
   String _source = 'auto';
@@ -237,6 +238,8 @@ class _HomePageState extends State<HomePage> {
       _svcT = Timer.periodic(const Duration(seconds: 3), (_) async {
         try {
           final v = await _native.invokeMethod<bool>('enabled') ?? false;
+          final l = _style.myLangs.isNotEmpty ? _style.myLangs.first : 'en-IN';
+          unawaited(_native.invokeMethod('lang', l == 'od-IN' ? 'or-IN' : l).catchError((_) {}));
           if (v != _nativeOn && mounted) setState(() => _nativeOn = v);
         } catch (_) {}
       });
@@ -274,10 +277,31 @@ class _HomePageState extends State<HomePage> {
       return const Scaffold(backgroundColor: kNavy, body: Center(child: CircularProgressIndicator()));
     }
     if (!_style.setupDone) {
-      return SetupScreen(style: _style, onDone: () => setState(() {}));
+      return SetupScreen(
+        style: _style,
+        onDone: () => setState(() => _fromSettings = false),
+        // from Settings: go back to Home. On the first run there is no earlier page, so no arrow
+        onBack: _fromSettings
+            ? () => setState(() {
+                  _style.setupDone = true;
+                  _fromSettings = false;
+                })
+            : null,
+      );
     }
     if (!_style.callDone) {
-      return CallWordsScreen(style: _style, onDone: () => setState(() {}));
+      return CallWordsScreen(
+        style: _style,
+        onDone: () => setState(() => _fromSettings = false),
+        onBack: () => setState(() {
+          if (_fromSettings) {
+            _style.callDone = true; // from Settings: back to Home
+            _fromSettings = false;
+          } else {
+            _style.setupDone = false; // first run: back to the language page
+          }
+        }),
+      );
     }
     return HomeScreen(
       onTalk: () => _open(TalkScreen(style: _style)),
@@ -971,7 +995,10 @@ class _HomePageState extends State<HomePage> {
           padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
           child: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 4), child: Text('Settings', style: TextStyle(color: kInk, fontSize: 26, fontWeight: FontWeight.w800))),
+              Row(children: [
+                IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back, color: kInk, size: 28), tooltip: 'Back'),
+                const Text('Settings', style: TextStyle(color: kInk, fontSize: 26, fontWeight: FontWeight.w800)),
+              ]),
               section('YOU'),
               TildaCard(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -983,6 +1010,7 @@ class _HomePageState extends State<HomePage> {
                     trailing: TextButton(
                       onPressed: () {
                         Navigator.pop(ctx);
+                        _fromSettings = true;
                         _style.setupDone = false;
                         setState(() {});
                       },
@@ -997,6 +1025,7 @@ class _HomePageState extends State<HomePage> {
                     trailing: TextButton(
                       onPressed: () {
                         Navigator.pop(ctx);
+                        _fromSettings = true;
                         _style.callDone = false;
                         setState(() {});
                       },

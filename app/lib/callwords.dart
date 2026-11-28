@@ -57,7 +57,8 @@ class CallWords {
 class CallWordsScreen extends StatefulWidget {
   final PersonalStyle style;
   final VoidCallback onDone;
-  const CallWordsScreen({super.key, required this.style, required this.onDone});
+  final VoidCallback? onBack;
+  const CallWordsScreen({super.key, required this.style, required this.onDone, this.onBack});
 
   @override
   State<CallWordsScreen> createState() => _CallWordsScreenState();
@@ -180,7 +181,29 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
-            child: _allDone ? _saved() : (_practising ? _practice() : _choose()),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (!_allDone && (_practising || widget.onBack != null))
+                IconButton(
+                  onPressed: () {
+                    if (_listening) _stt.stop();
+                    if (_practising) {
+                      setState(() {
+                        _practising = false;
+                        _listening = false;
+                        _heard = '';
+                        _note = '';
+                      });
+                    } else {
+                      widget.onBack!();
+                    }
+                  },
+                  icon: const Icon(Icons.arrow_back, color: kInk, size: 28),
+                  tooltip: 'Back',
+                  padding: EdgeInsets.zero,
+                  alignment: Alignment.centerLeft,
+                ),
+              Expanded(child: _allDone ? _saved() : (_practising ? _practice() : _choose())),
+            ]),
           ),
         ),
       );

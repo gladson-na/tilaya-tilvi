@@ -9,7 +9,8 @@ import 'widgets.dart';
 class SetupScreen extends StatefulWidget {
   final PersonalStyle style;
   final VoidCallback onDone;
-  const SetupScreen({super.key, required this.style, required this.onDone});
+  final VoidCallback? onBack; // null on the very first run: there is nothing to go back to
+  const SetupScreen({super.key, required this.style, required this.onDone, this.onBack});
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
@@ -23,6 +24,7 @@ class _SetupScreenState extends State<SetupScreen> {
   void initState() {
     super.initState();
     _notes = widget.style.notesLang;
+    _picked.addAll(widget.style.myLangs);
   }
 
   Future<void> _go() async {
@@ -43,7 +45,16 @@ class _SetupScreenState extends State<SetupScreen> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const SizedBox(height: 4),
+              if (widget.onBack != null)
+                IconButton(
+                  onPressed: widget.onBack,
+                  icon: const Icon(Icons.arrow_back, color: kInk, size: 28),
+                  tooltip: 'Back',
+                  padding: EdgeInsets.zero,
+                  alignment: Alignment.centerLeft,
+                )
+              else
+                const SizedBox(height: 4),
               const Text('Speak your language', style: TextStyle(color: kInk, fontSize: 28, fontWeight: FontWeight.w800, height: 1.15)),
               const SizedBox(height: 4),
               const Text('Choose all that you use. You can change this later.', style: TextStyle(color: kSub, fontSize: 16)),
