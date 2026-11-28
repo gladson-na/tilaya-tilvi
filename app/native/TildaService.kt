@@ -276,6 +276,12 @@ class TildaService : AccessibilityService() {
                 PixelFormat.TRANSLUCENT)
             lp.gravity = Gravity.TOP or Gravity.START
             val dm = resources.displayMetrics
+            if (savedX < 0) {
+                try {
+                    val sp = getSharedPreferences("tilda_native", Context.MODE_PRIVATE)
+                    savedX = sp.getInt("bx", -1); savedY = sp.getInt("by", -1)
+                } catch (_: Exception) {}
+            }
             lp.x = (if (savedX >= 0) savedX else dm.widthPixels - size - (12 * d).toInt()).coerceIn(0, Math.max(0, screenW() - size))
             lp.y = (if (savedY >= 0) savedY else dm.heightPixels / 2 - size).coerceIn(0, Math.max(0, screenH() - size))
             var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
@@ -294,7 +300,13 @@ class TildaService : AccessibilityService() {
                             try { wm2.updateViewLayout(v, lp) } catch (_: Exception) {}
                         }
                     }
-                    android.view.MotionEvent.ACTION_UP -> { handler.removeCallbacks(lpR); if (!moved && !longFired) tapped() }
+                    android.view.MotionEvent.ACTION_UP -> {
+                        handler.removeCallbacks(lpR)
+                        if (moved) {
+                            // remember the spot on the phone, so a restart of the service does not put the bubble back
+                            try { getSharedPreferences("tilda_native", Context.MODE_PRIVATE).edit().putInt("bx", lp.x).putInt("by", lp.y).apply() } catch (_: Exception) {}
+                        } else if (!longFired) tapped()
+                    }
                 }
                 true
             }

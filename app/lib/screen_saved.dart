@@ -97,7 +97,7 @@ class _SavedDetailState extends State<SavedDetail> {
   File? _photo;
   late String _tab;
 
-  static const _names = {'spoken': 'As spoken', 'letters': 'Second copy', 'meaning': 'Meaning', 'summary': 'Summary', 'text': 'Text', 'original': 'Original'};
+  static const _names = {'spoken': 'As spoken', 'letters': 'Second copy', 'meaning': 'Meaning', 'summary': 'Summary', 'text': 'Text', 'original': 'Original', 'questions': 'Questions'};
 
   @override
   void initState() {
