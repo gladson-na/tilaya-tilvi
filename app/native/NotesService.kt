@@ -60,8 +60,9 @@ class NotesService : Service() {
     private var anim: ValueAnimator? = null
     private var bar: LinearLayout? = null
     private var barLp: WindowManager.LayoutParams? = null
-    private var pauseBtn: TextView? = null
-    private var cancelBtn: TextView? = null
+    private var pauseBtn: View? = null
+    private var playBtn: View? = null
+    private var cancelBtn: View? = null
     private var clock: TextView? = null
     private var paused = false
     private var runStart = 0L
@@ -178,15 +179,37 @@ class NotesService : Service() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun pill(label: String, fill: Int, onTap: () -> Unit): TextView = TextView(this).apply {
-        text = label
-        setTextColor(Color.WHITE)
-        textSize = 15f
-        gravity = Gravity.CENTER
-        setPadding(dp(14), dp(10), dp(14), dp(10))
-        background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(22).toFloat() }
-        contentDescription = label
-        setOnClickListener { onTap() }
+    /** A round button with a drawn icon: 0 close, 1 pause, 2 play, 3 stop. */
+    private inner class IconBtn(c: Context, val kind: Int, val fill: Int) : View(c) {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        init {
+            minimumWidth = dp(38); minimumHeight = dp(38)
+            contentDescription = when (kind) { 0 -> "Cancel"; 1 -> "Pause"; 2 -> "Resume"; else -> "Stop" }
+        }
+        override fun onMeasure(w: Int, h: Int) = setMeasuredDimension(dp(38), dp(38))
+        override fun onDraw(cv: Canvas) {
+            val s = width.toFloat(); val c = s / 2
+            p.style = Paint.Style.FILL; p.color = fill
+            cv.drawCircle(c, c, c, p)
+            p.color = Color.WHITE
+            when (kind) {
+                0 -> { p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.09f; p.strokeCap = Paint.Cap.ROUND
+                    val d = s * 0.27f
+                    cv.drawLine(c - d, c - d, c + d, c + d, p); cv.drawLine(c + d, c - d, c - d, c + d, p) }
+                1 -> { val w = s * 0.11f; val h = s * 0.28f
+                    cv.drawRoundRect(c - w * 1.9f, c - h, c - w * 0.5f, c + h, 3f, 3f, p)
+                    cv.drawRoundRect(c + w * 0.5f, c - h, c + w * 1.9f, c + h, 3f, 3f, p) }
+                2 -> { val path = android.graphics.Path(); val h = s * 0.28f
+                    path.moveTo(c - h * 0.7f, c - h); path.lineTo(c + h, c); path.lineTo(c - h * 0.7f, c + h); path.close()
+                    cv.drawPath(path, p) }
+                else -> { val h = s * 0.24f; cv.drawRoundRect(c - h, c - h, c + h, c + h, 5f, 5f, p) }
+            }
+        }
+    }
+
+    private fun refreshButtons() {
+        pauseBtn?.alpha = if (paused) 0.3f else 1f
+        playBtn?.alpha = if (paused) 1f else 0.3f
     }
 
     private fun paintPaused(p: Boolean) {
@@ -194,7 +217,7 @@ class NotesService : Service() {
         val now = System.currentTimeMillis()
         if (p) elapsedMs += now - runStart else runStart = now
         paused = p
-        pauseBtn?.text = if (p) "Resume" else "Pause"
+        refreshButtons()
         if (p) clock?.text = "Paused"
     }
 
@@ -217,39 +240,37 @@ class NotesService : Service() {
         if (!Settings.canDrawOverlays(this)) return
         try {
             val teal = 0xFF0B6B5A.toInt()
-            val bg = GradientDrawable().apply { setColor(0xEE0E1A17.toInt()); cornerRadius = dp(30).toFloat() }
+            val bg = GradientDrawable().apply { setColor(0xEE0E1A17.toInt()); cornerRadius = dp(24).toFloat() }
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 background = bg
-                setPadding(dp(10), dp(8), dp(10), dp(8))
+                setPadding(dp(8), dp(5), dp(8), dp(5))
             }
             val handle = TextView(this).apply {
-                text = "::"; setTextColor(0xFF8FB8AC.toInt()); textSize = 20f
-                setPadding(dp(6), 0, dp(10), 0)
+                text = "::"; setTextColor(0xFF8FB8AC.toInt()); textSize = 18f
+                setPadding(dp(4), 0, dp(8), 0)
                 contentDescription = "Drag"
             }
-            clock = TextView(this).apply { text = "00:00"; setTextColor(Color.WHITE); textSize = 16f; setPadding(0, 0, dp(10), 0) }
-            pauseBtn = pill("Pause", teal) {
-                val next = !paused
-                paintPaused(next)
-                send(if (next) "pause" else "resume")
-            }
-            val stop = pill("Stop", 0xFF2D7D6E.toInt()) { send("stop") }
-            cancelBtn = pill("Cancel", 0xFF8A2B25.toInt()) {
-                if (!cancelArmed) {
-                    cancelArmed = true
-                    cancelBtn?.text = "Delete?"
-                    ui.postDelayed({ cancelArmed = false; cancelBtn?.text = "Cancel" }, 3000)
-                } else {
-                    cancelArmed = false
-                    send("cancel")
+            clock = TextView(this).apply { text = "00:00"; setTextColor(Color.WHITE); textSize = 14f; setPadding(0, 0, dp(8), 0) }
+            cancelBtn = IconBtn(this, 0, 0xFF8A2B25.toInt()).apply {
+                setOnClickListener {
+                    if (!cancelArmed) {
+                        cancelArmed = true
+                        clock?.text = "Tap X again"
+                        ui.postDelayed({ cancelArmed = false; if (paused) clock?.text = "Paused" }, 3000)
+                    } else {
+                        cancelArmed = false
+                        send("cancel")
+                    }
                 }
             }
+            pauseBtn = IconBtn(this, 1, teal).apply { setOnClickListener { if (!paused) { paintPaused(true); send("pause") } } }
+            playBtn = IconBtn(this, 2, teal).apply { setOnClickListener { if (paused) { paintPaused(false); send("resume") } } }
+            val stop = IconBtn(this, 3, 0xFF2D7D6E.toInt()).apply { setOnClickListener { send("stop") } }
+            refreshButtons()
             row.addView(handle); row.addView(clock)
-            row.addView(pauseBtn, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
-            row.addView(stop, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
-            row.addView(cancelBtn)
+            for (b in listOf(cancelBtn!!, pauseBtn!!, playBtn!!, stop)) row.addView(b, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(5) })
             val lp = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,

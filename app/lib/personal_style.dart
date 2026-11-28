@@ -18,6 +18,7 @@ class PersonalStyle {
   String notesLang = 'hi-IN'; // the language notes are also written or translated into
   final Set<String> callWords = {'hey'}; // how this person likes to call Tilda: hey, ae, oye, o, arre, suno, ok
   final Set<String> callHeard = {}; // how the phone's speech engine actually wrote their calls (learned in practice)
+  final Set<String> callTrained = {}; // call-words practised three times: these will work
   bool callDone = false; // the call-word choice and practice has been done or skipped
   bool firstDone = false; // the first successful dictation has happened
   double trainedSeconds = 0; // reviewed speech collected so far
@@ -57,6 +58,11 @@ class PersonalStyle {
           ..clear()
           ..addAll((j['callWords'] as List).cast<String>());
       }
+      if (j['callTrained'] is List) {
+        callTrained
+          ..clear()
+          ..addAll((j['callTrained'] as List).cast<String>());
+      }
       if (j['callHeard'] is List) {
         callHeard
           ..clear()
@@ -83,6 +89,7 @@ class PersonalStyle {
           'callDone': callDone,
           'callWords': callWords.toList(),
           'callHeard': callHeard.toList(),
+          'callTrained': callTrained.toList(),
           'setupDone': setupDone,
           'notesLang': notesLang,
           'copyLang': copyLang,

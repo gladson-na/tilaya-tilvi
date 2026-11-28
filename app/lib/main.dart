@@ -1016,6 +1016,11 @@ class _HomePageState extends State<HomePage> {
                       subtitle: Text(_nativeOn ? 'A mic bubble appears when you tap a text box.' : 'Turn on "Tilda typing" in Accessibility. If it is greyed out: App info, three dots, Allow restricted settings.'),
                       trailing: TextButton(onPressed: () => _native.invokeMethod('settings'), child: Text(_nativeOn ? 'Manage' : 'Turn on')),
                     ),
+                    if (_nativeOn)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 8),
+                        child: Text('Tip: if the bubble stops after a long time, open phone Settings, Apps, Tilda, Battery, and choose Unrestricted. Some phones stop background apps to save battery.', style: TextStyle(color: kSub, fontSize: 14, height: 1.3)),
+                      ),
                     const Divider(),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,

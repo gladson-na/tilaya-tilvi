@@ -92,7 +92,7 @@ class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key, required this.onTalk, required this.onCapture, required this.onNotes, required this.onTranslate, required this.onSettings});
 
   Widget _row(IconData icon, String title, String sub, VoidCallback f) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.only(bottom: 8),
         child: Semantics(
           button: true,
           label: '$title. $sub',
@@ -103,16 +103,15 @@ class HomeScreen extends StatelessWidget {
               borderRadius: BorderRadius.circular(18),
               onTap: f,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 child: Row(children: [
-                  Icon(icon, color: kInk, size: 28),
-                  const SizedBox(width: 16),
+                  Icon(icon, color: kInk, size: 26),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: ExcludeSemantics(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(title, style: const TextStyle(color: kInk, fontSize: 19, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 2),
-                        Text(sub, style: const TextStyle(color: kSub, fontSize: 15)),
+                        Text(title, style: const TextStyle(color: kInk, fontSize: 18, fontWeight: FontWeight.w700)),
+                        Text(sub, style: const TextStyle(color: kSub, fontSize: 14)),
                       ]),
                     ),
                   ),
@@ -128,8 +127,9 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) => Scaffold(
         backgroundColor: kBg,
         body: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
                 const Text('Tilda', style: TextStyle(color: kInk, fontSize: 30, fontWeight: FontWeight.w800)),
@@ -140,36 +140,36 @@ class HomeScreen extends StatelessWidget {
                     tooltip: 'Saved'),
                 IconButton(onPressed: onSettings, icon: const Icon(Icons.settings_outlined, color: kInk, size: 28), tooltip: 'Settings'),
               ]),
-              const SizedBox(height: 18),
-              const Text('What can I help with?', style: TextStyle(color: kInk, fontSize: 28, fontWeight: FontWeight.w800, height: 1.15)),
-              const SizedBox(height: 18),
+              const SizedBox(height: 4),
+              const Text('What can I help with?', style: TextStyle(color: kInk, fontSize: 26, fontWeight: FontWeight.w800, height: 1.15)),
+              const SizedBox(height: 12),
               TildaCard(
-                padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
                 child: Column(children: [
-                  const TildaOrb(state: OrbState.idle, size: 150),
-                  const SizedBox(height: 14),
-                  const Text('Talk to Tilda', style: TextStyle(color: kInk, fontSize: 24, fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 4),
-                  const Text('Ask a question. Say it naturally.', style: TextStyle(color: kSub, fontSize: 16)),
-                  const SizedBox(height: 18),
+                  const TildaOrb(state: OrbState.idle, size: 96),
+                  const SizedBox(height: 8),
+                  const Text('Talk to Tilda', style: TextStyle(color: kInk, fontSize: 22, fontWeight: FontWeight.w800)),
+                  const Text('Ask a question. Say it naturally.', style: TextStyle(color: kSub, fontSize: 15)),
+                  const SizedBox(height: 10),
                   Semantics(
                     button: true,
                     label: 'Start talking to Tilda',
                     child: SizedBox(
                       width: double.infinity,
-                      height: 58,
+                      height: 52,
                       child: FilledButton.icon(onPressed: onTalk, icon: const Icon(Icons.mic, size: 26), label: const Text('Start talking')),
                     ),
                   ),
                 ]),
               ),
-              const SizedBox(height: 26),
-              const Text('Explore', style: TextStyle(color: kInk, fontSize: 20, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 10),
+              const SizedBox(height: 14),
+              const Text('Explore', style: TextStyle(color: kInk, fontSize: 19, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
               _row(Icons.photo_camera_outlined, 'Capture', 'Read text from a photo', onCapture),
               _row(Icons.notes, 'Take notes', 'Turn speech into notes', onNotes),
               _row(Icons.translate, 'Translate', 'Two people, two languages', onTranslate),
             ],
+          ),
           ),
         ),
       );

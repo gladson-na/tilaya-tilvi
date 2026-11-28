@@ -572,7 +572,7 @@ def test_clean_tail_drops_invented_hello_only_after_a_full_sentence():
 
 
 def test_live_questions_get_web_answer(monkeypatch):
-    monkeypatch.setattr(tools, "web_answer", lambda q, n="English": "Petrol is about 100 rupees a litre in Bhubaneswar today.")
+    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="": "Petrol is about 100 rupees a litre in Bhubaneswar today.")
     out = tools.context_for([{"role": "user", "content": "what is the petrol price today"}])
     assert out["intent"] == "live" and "Petrol" in out["extra"]
 
@@ -762,3 +762,37 @@ def test_rotating_fake_addresses_hit_the_global_limit(monkeypatch):
     codes = [c.post("/act", json={"text": "hi"}, headers={"X-Forwarded-For": f"9.9.9.{i}"}).status_code for i in range(5)]
     assert codes[:3] == [200] * 3 and codes[3] == 429
     server._ALL.clear()
+
+
+def test_nearby_question_uses_web_with_location(monkeypatch):
+    seen = {}
+    def fake(q, n="English", where=""):
+        seen["q"], seen["where"] = q, where
+        return "Nearest hospital: City Care, 1 km."
+    monkeypatch.setattr(tools, "web_answer", fake)
+    monkeypatch.setattr(tools, "place_name", lambda a, b: "Mira Road, Thane")
+    out = tools.context_for([{"role": "user", "content": "which is the closest hospital"}], 19.28, 72.87)
+    assert out["intent"] == "live" and "City Care" in out["extra"]
+    assert "19.2800" in seen["where"] and "Mira Road" in seen["where"]
+
+
+def test_short_follow_up_keeps_the_earlier_question(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="": seen.setdefault("q", q) or "ok")
+    tools.context_for([{"role": "user", "content": "which is the closest hospital"},
+                       {"role": "assistant", "content": "Which area are you in?"},
+                       {"role": "user", "content": "I am at Mira Road near the station"}])
+    assert "closest hospital" in seen["q"] and "Mira Road" in seen["q"]
+
+
+def test_without_location_it_asks_the_area(monkeypatch):
+    monkeypatch.setattr(tools, "web_answer", lambda q, n="English", where="": "Some answer")
+    out = tools.context_for([{"role": "user", "content": "nearest pharmacy open now"}])
+    assert "which area" in out["extra"]
+
+
+def test_plain_chat_is_not_searched(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("should not search")
+    monkeypatch.setattr(tools, "web_answer", boom)
+    assert tools.context_for([{"role": "user", "content": "thank you so much"}])["intent"] is None
