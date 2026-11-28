@@ -10,6 +10,23 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private var pending: MethodChannel.Result? = null
+    private var chRef: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        grabWake(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        grabWake(intent)
+    }
+
+    /** "Hey Tilda" was heard by the background service: tell the Flutter side to open Talk. */
+    private fun grabWake(i: Intent?) {
+        if (WakeService.pendingText == null) return
+        try { chRef?.invokeMethod("wake", null) } catch (_: Exception) {}
+    }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -28,6 +45,8 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tilda/native")
+        chRef = ch
+        WakeService.onWake = { runOnUiThread { try { ch.invokeMethod("wake", null) } catch (_: Exception) {} } }
         TildaService.onFocus = { f -> ch.invokeMethod("focus", f) }
         TildaService.onTap = { ch.invokeMethod("toggle", null) }
         TildaService.onLongPress = { ch.invokeMethod("longpress", null) }
@@ -61,6 +80,18 @@ class MainActivity : FlutterActivity() {
                 "captureLevel" -> res.success(NotesService.level)
                 "notesPaused" -> { NotesService.syncPaused(call.arguments as Boolean); res.success(true) }
                 "notesOff" -> { stopService(Intent(this, NotesService::class.java)); res.success(true) }
+                "wakeStart" -> {
+                    try {
+                        @Suppress("UNCHECKED_CAST")
+                        WakeService.extra = ((call.arguments as? List<*>) ?: emptyList<Any>()).map { it.toString() }
+                        val i = Intent(this, WakeService::class.java)
+                        if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                        res.success(true)
+                    } catch (e: Exception) { res.success(false) }
+                }
+                "wakeStop" -> { stopService(Intent(this, WakeService::class.java)); res.success(true) }
+                "wakePause" -> { WakeService.paused = call.arguments as Boolean; res.success(WakeService.running) }
+                "takeWake" -> { val t = WakeService.pendingText; WakeService.pendingText = null; res.success(t) }
                 "toBack" -> { moveTaskToBack(true); res.success(true) }
                 "settings" -> {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
