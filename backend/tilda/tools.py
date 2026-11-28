@@ -26,7 +26,7 @@ DISTANCE_RE = re.compile(
     r"how far|distance|far is|far from|how long (?:to|will it take)|time to reach|how do i reach|kitna door|कितनी दूर|कितना दूर|दूरी|"
     r"कितने किलोमीटर|कितनी देर|ଦୂର|দূর|దూరం|தூரம்|ದೂರ|ദൂരം|અંતર|ਦੂਰੀ", re.I)
 CALC_RE = re.compile(
-    r"total|sum\b|add up|calculate|how much|sold|sale|बेचा|बेची|कुल|जोड़|हिसाब|कितना|rupee|\brs\b|₹|रुपये|रुपए|कितने", re.I)
+    r"total|sum\b|add up|calculate|\bplus\b|\bminus\b|\btimes\b|multipl|divid|percent|how much|sold|sale|बेचा|बेची|कुल|जोड़|हिसाब|कितना|rupee|\brs\b|₹|रुपये|रुपए|कितने", re.I)
 NUMWORDS_RE = re.compile(
     r"\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)\b|"
     r"एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|बीस|तीस|चालीस|पचास|साठ|सत्तर|अस्सी|नब्बे|सौ|हज़ार|हजार", re.I)
@@ -44,7 +44,9 @@ WMO = {0: "clear sky", 1: "mostly clear", 2: "partly cloudy", 3: "overcast", 45:
 
 LIVE_RE = re.compile(
     r"\b(today|tonight|tomorrow|latest|news|price|rate of|cost of|score|current|currently|right now|who won|who is the|when is|"
-    r"open now|train|flight|bus timing|schedule|result|stock|petrol|diesel|gold|exchange rate|trending|how long|how much time|travel time)\b|"
+    r"open now|train|flight|bus timing|schedule|result|stock|petrol|diesel|gold|exchange rate|trending|how long|how much time|travel time|"
+    r"fares?|timings?|timetable|points table|standings|fixtures|winners?|elections?|population|visas?|hotels?|metro|subway|tube|tram|bus|cab|taxi|"
+    r"gst|tax|opening hours|tickets?|offers?|discounts?|cheapest|rankings?|ranked|vacancies|admission|cut.?off)\b|"
     r"आज|कल|ताज़ा|ताजा|खबर|समाचार|भाव|दाम|कीमत|स्कोर|नतीजा|रिज़ल्ट|ट्रेन|फ्लाइट|कितना समय|कितनी देर|कब है|ଆଜି|ଖବର|ଦାମ", re.I)
 
 
@@ -52,7 +54,8 @@ NEARBY_RE = re.compile(
     r"\b(near me|nearby|nearest|closest|close to me|around here|around me|in my area|my location|hospital|clinic|pharmacy|chemist|doctor|restaurant|hotel|hostel|atm|bank|petrol pump|police|"
     r"bus stop|station|supermarket|shop|temple|church|mosque|school|college)\b|"
     r"पास में|नज़दीक|नजदीक|आसपास|अस्पताल|दवाई की दुकान|ਨੇੜੇ|ਹਸਪਤਾਲ|ସମୀପ|ହସ୍ପିଟାଲ|దగ్గర|ఆసుపత్రి|அருகில்|மருத்துவமனை|ಹತ್ತಿರ|ಆಸ್ಪತ್ರೆ|അടുത്ത|ആശുപത്രി|কাছে|হাসপাতাল|નજીક|હોસ્પિટલ", re.I)
-CHAT_RE = re.compile(r"\b(joke|story|poem|song|riddle|translate|thank you|thanks|hello|hi there|good (?:morning|night|evening)|what time is it|what is the time|what is the date|how are you)\b", re.I)
+CHAT_RE = re.compile(r"\b(joke|story|poem|song|riddle|translate|thank you|thanks|hello|hi there|good (?:morning|night|evening)|what time is it|what is the time|what is the date|how are you|"
+                     r"you are (?:great|good|nice|sweet|awesome|amazing|smart|funny)|who are you|what can you do|your name|bye|goodbye|i love you|i like you|sing)\b", re.I)
 # a question: so Tilda looks it up live instead of answering from memory
 INFO_RE = re.compile(
     r"\?|\b(what|which|who|where|when|why|how|tell me|find|show me|search|look up|best|price|cost|open|timing|address|phone number|contact|"
@@ -172,7 +175,7 @@ def geocode(place: str):
     return float(j["lat"]), float(j["lon"]), j.get("display_name", place).split(",")[0]
 
 
-def distance(lat: float, lon: float, text: str) -> str:
+def distance(lat: float, lon: float, text: str) -> tuple:
     try:
         place = str(llm_json('Find the destination the user asks the distance or time to. JSON: {"place":"..."}. Write the place in '
                              'English with its city, like "Gateway of India, Mumbai". Empty string if there is none.', text).get("place", "")).strip()
@@ -188,7 +191,8 @@ def distance(lat: float, lon: float, text: str) -> str:
         raise ToolError("no route found")
     rt = r.json()["routes"][0]
     km, mins = rt["distance"] / 1000, max(1, round(rt["duration"] / 60))
-    return f"Road distance from the user's location to {name}: about {km:.1f} km, around {mins} minutes by car."
+    return (f"Road distance from the user's location to {name}: about {km:.1f} km, around {mins} minutes by car with no traffic. "
+            "This is the map's no-traffic time. Live traffic is not known, so say so and say it can take longer at busy hours.", name)
 
 
 CAMERA_RE = re.compile(
@@ -198,29 +202,43 @@ CAMERA_RE = re.compile(
 _AREAS: dict = {}
 
 
-def place_name(lat: float, lon: float) -> str:
-    """The area name for a position (OpenStreetMap), or an empty string. Never raises."""
+def geo_info(lat: float, lon: float) -> tuple:
+    """(area name, two-letter country code) for a position (OpenStreetMap), or ("", ""). Never raises."""
     key = (round(lat, 2), round(lon, 2))
     if key in _AREAS:
         return _AREAS[key]
-    name = ""
+    name, cc = "", ""
     try:
         r = requests.get("https://nominatim.openstreetmap.org/reverse", headers=UA, timeout=4,
                          params={"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 14})
         if r.status_code == 200:
-            name = str(r.json().get("display_name", ""))[:160]
-    except (requests.RequestException, ValueError):
+            j = r.json()
+            name = str(j.get("display_name", ""))[:160]
+            cc = str((j.get("address") or {}).get("country_code", "")).lower()
+    except (requests.RequestException, ValueError, AttributeError):
         pass
     if len(_AREAS) > 500:
         _AREAS.clear()
-    _AREAS[key] = name
-    return name
+    _AREAS[key] = (name, cc)
+    return name, cc
 
 
-# Tilda is for India: money is in rupees, shops are Indian ones, and amounts are written so a voice reads them right
+def place_name(lat: float, lon: float) -> str:
+    return geo_info(lat, lon)[0]
+
+
 INDIA = (" The user is in India. Give every price in Indian rupees, written like '299 rupees', from Indian shops or apps "
          "(Blinkit, Zepto, Swiggy Instamart, BigBasket, Amazon.in, Flipkart, the brand's own Indian site). "
          "Never give dollars or other currencies: if only a foreign price exists, convert it to rupees and say 'around'.")
+
+
+def money_rule(cc: str = "") -> str:
+    """Money in the currency of the country the person is in. India (or unknown) means rupees."""
+    if not cc or cc == "in":
+        return INDIA
+    return (f" The user is in the country with code {cc.upper()}. Give prices in that country's own currency, from shops there, "
+            "and say 'around' when converting. Do not give rupees or dollars unless that is the local currency.")
+
 
 LAST_ERR: dict = {}
 
@@ -229,12 +247,12 @@ def note_err(kind: str, e) -> None:
     LAST_ERR[kind] = f"{now_text()}: {type(e).__name__}: {e}"[:300]
 
 
-def web_answer(question: str, lang_name: str = "English", where: str = "") -> str:
+def web_answer(question: str, lang_name: str = "English", where: str = "", cc: str = "") -> str:
     """A short, checked answer from the live web (Groq's browser search on gpt-oss). Raises ToolError when it cannot."""
     if not os.environ.get("GROQ_API_KEY"):
         raise ToolError("key not set: add GROQ_API_KEY for live answers")
     msgs = [{"role": "system", "content": "Answer from a web search in at most three short sentences, plain words, no links, no markdown. "
-             "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "." + INDIA + where},
+             "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "." + money_rule(cc) + where},
             {"role": "user", "content": question}]
     try:
         return groq.chat(msgs, groq.WEB_MODELS, max_tokens=350, temperature=0.1, tools=[{"type": "browser_search"}], timeout=30)
@@ -289,11 +307,25 @@ _PALM_RE = re.compile(r"palm\s*(?:oil|olein|kernel)|palmolein|पाम", re.I)
 _INGR_RE = re.compile(r"ingredients?|contains?|सामग्री|साहित्य", re.I)
 
 
+_NEG_RE = re.compile(r"\b(no|without|free|nil|not|zero|non)\b|बिना|रहित|मुक्त", re.I)
+
+
+def _palm_listed(original: str) -> bool:
+    """True only when palm oil is in the ingredients, not when the label says 'no palm oil' or 'palm oil free'."""
+    for m in _PALM_RE.finditer(original):
+        before, after = original[max(0, m.start() - 18):m.start()], original[m.end():m.end() + 14]
+        if not (_NEG_RE.search(before) or _NEG_RE.search(after)):
+            return True
+    return False
+
+
 def label_facts(original: str) -> str:
     """One plain fact about the label, only when the ingredients are really in the photo. No opinions."""
     if not _INGR_RE.search(original or ""):
         return ""
-    if _PALM_RE.search(original):
+    if _PALM_RE.search(original) and not _palm_listed(original):
+        return "Palm oil: the label says it has none."
+    if _palm_listed(original):
         return "Palm oil: listed in the ingredients."
     return "Palm oil: not listed in the ingredients that could be read."
 
@@ -399,21 +431,34 @@ def context_for(messages, lat=None, lon=None) -> dict:
         if DISTANCE_RE.search(last):
             if lat is None or lon is None:
                 return {"intent": "distance", "extra": "LIVE DATA: the user's location is not shared, so you cannot work out the distance. Say that, and ask which area they are in."}
-            return {"intent": "distance", "extra": "LIVE DATA: " + distance(lat, lon, last)}
+            road, dest = distance(lat, lon, last)
+            area, cc = geo_info(lat, lon)
+            transit = ""
+            try:  # the public transport option for that place (train, metro, bus, tram), from the web, as a schedule
+                transit = web_answer(f"Public transport from {area or 'the user location'} to {dest}: which train, metro, bus or tram goes, "
+                                     "the next scheduled departures and the usual travel time. Say it is the schedule, not live running status.",
+                                     cc=cc)
+            except ToolError:
+                pass
+            extra = "LIVE DATA: " + road + (" Public transport, from the web: " + transit if transit else
+                    " Public transport could not be checked just now, so do not mention it.")
+            return {"intent": "distance", "extra": extra + " Answer only the distance, the drive time and the public transport. "
+                    "Do not mention weather or anything else, and do not ask a question back."}
         if WEATHER_RE.search(last):
             if lat is None or lon is None:
                 return {"intent": "weather", "extra": "LIVE DATA: the user's location is not shared, so you cannot check the weather. Say that, and ask which area they are in."}
             return {"intent": "weather", "extra": "LIVE DATA: " + weather(lat, lon)}
         if (LIVE_RE.search(last) or NEARBY_RE.search(last) or (INFO_RE.search(last) and len(last.split()) >= 3)) and not _is_sum(last) and not CHAT_RE.search(last):
-            where = ""
+            where, cc = "", ""
             if lat is not None and lon is not None:
+                area, cc = geo_info(lat, lon)
                 where = (f" The user's phone is at latitude {lat:.4f}, longitude {lon:.4f}"
-                         + (f" ({place_name(lat, lon)})" if place_name(lat, lon) else "") + ". Use it for anything near me, nearest or closest.")
+                         + (f" ({area})" if area else "") + ". Use it for anything near me, nearest or closest.")
             # a short follow-up ("I am at Mira Road") only makes sense with the question before it
             users = [str(m.get("content", "")) for m in (messages or []) if m.get("role") == "user"][-3:]
             q = " ".join(users) if len(last.split()) < 10 else last
             ask_area = "" if where else " If the answer depends on where the user is and you do not know, ask which area they are in."
-            return {"intent": "live", "extra": "LIVE DATA (from the web): " + web_answer(q, where=where) +
+            return {"intent": "live", "extra": "LIVE DATA (from the web): " + web_answer(q, where=where, cc=cc) +
                     " Say this in your own words, briefly, and say it is from the web." + ask_area}
         if CALC_RE.search(last) and (len(re.findall(r"\d+", last)) >= 2 or len(NUMWORDS_RE.findall(last)) >= 2):
             return {"intent": "calc", "extra": "LIVE DATA: " + calculate(last)}
@@ -505,7 +550,12 @@ def summarize(text: str, lang_name: str) -> str:
     text = (text or "").strip()
     if len(text) <= 12000:
         return _llm_text([{"role": "system", "content": system}, {"role": "user", "content": text}])
-    parts = _split(text, 10000)[:8]
+    size = 10000
+    parts = _split(text, size)
+    while len(parts) > 8 and size < 40000:  # at most 8 parts, none dropped: make the parts bigger instead
+        size = int(size * 1.2)
+        parts = _split(text, size)
+    parts = parts[:8]
     part_sys = (f"Write in {lang_name}. These are the notes of one part of a longer talk. Give 5 to 8 bullet points starting with '- ', "
                 "keeping every name, number, date and action item that was said. Use only what the text says. Plain text.")
     notes = [_llm_text([{"role": "system", "content": part_sys}, {"role": "user", "content": p}], max_tokens=700) for p in parts]
