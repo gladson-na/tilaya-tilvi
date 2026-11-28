@@ -8,6 +8,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 import 'api.dart';
+import 'live_stt.dart';
 import 'personal_style.dart';
 import 'screen_saved.dart';
 import 'store.dart';
@@ -27,6 +28,9 @@ class CaptureScreen extends StatefulWidget {
 class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserver {
   final _player = AudioPlayer();
   final _tts = FlutterTts();
+  final _stt = LiveStt();
+  bool _asking = false; // listening for a question about the product
+  String _asked = '', _answer = '';
   CameraController? _cam;
   String _camError = '';
   OrbState _orb = OrbState.idle;
@@ -55,6 +59,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     _cam?.dispose();
     _player.dispose();
     _tts.stop();
+    _stt.stop();
     super.dispose();
   }
 
@@ -133,6 +138,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
         _text = '';
         _original = '';
         _error = '';
+        _asked = _answer = '';
         _orb = OrbState.reading;
       });
       Map<String, dynamic> j;
@@ -244,7 +250,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       _error = '';
     });
     try {
-      final t = (await Api.translate(src, 'auto', lang)).trim();
+      final t = (await Api.relabel(src, lang)).trim();
       if (t.isEmpty) throw Exception('empty');
       if (my != _rg || !mounted) return;
       _set(() {
@@ -261,6 +267,60 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
         _error = 'I could not translate it into ${kLangs[lang] ?? lang} just now. Please check the internet and tap the language again.';
       });
     }
+  }
+
+  /// Tap the mic, say a question about the product, and hear a short answer from the web.
+  Future<void> _ask() async {
+    if (_asking) {
+      await _stt.stop();
+      _set(() => _asking = false);
+      return;
+    }
+    await _player.stop();
+    await _tts.stop();
+    _rg++;
+    _set(() {
+      _asking = true;
+      _asked = '';
+      _answer = '';
+      _error = '';
+    });
+    final ok = await _stt.start(
+      locale: _lang == 'od-IN' ? 'or-IN' : _lang,
+      onPartial: (t) => _set(() => _asked = t),
+      onPhrase: (t) async {
+        await _stt.stop();
+        if (!mounted) return;
+        _set(() {
+          _asking = false;
+          _asked = t;
+          _orb = OrbState.reading;
+        });
+        try {
+          final a = (await Api.ask(t, _original.isNotEmpty ? _original : _text, _lang)).trim();
+          if (!mounted) return;
+          _set(() {
+            _answer = a;
+            _orb = OrbState.speaking;
+          });
+          await _say(a);
+        } catch (_) {
+          if (mounted) _set(() => _error = 'I could not find that just now. Please check the internet and ask again.');
+        }
+        if (mounted) _set(() => _orb = OrbState.idle);
+      },
+      onEnd: (why) {
+        if (!mounted) return;
+        _set(() {
+          _asking = false;
+          if (_asked.isEmpty) _error = 'I did not hear a question. Tap the mic and try again.';
+        });
+      },
+    );
+    if (!ok && mounted) _set(() {
+      _asking = false;
+      _error = 'Speech is not ready on this phone.';
+    });
   }
 
   List<String> _split(String t) => t.split(RegExp(r'\n\s*\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -372,15 +432,29 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   }
 
   Widget _result() => Column(children: [
-        if (_photo != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-            child: ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover))),
-          ),
         Expanded(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (_photo != null)
+                ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover))),
+              const SizedBox(height: 14),
+              if (_asking || _asked.isNotEmpty || _answer.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(14), border: Border.all(color: kPrimary)),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(_asking && _asked.isEmpty ? 'Listening… ask about this product' : _asked, style: const TextStyle(color: kSub, fontSize: 16)),
+                    if (_answer.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      SelectableText(_answer, style: const TextStyle(color: kInk, fontSize: 21, height: 1.35, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      const Text('From the web. Prices and details can change.', style: TextStyle(color: kSub, fontSize: 14)),
+                    ],
+                  ]),
+                ),
               if (_orb == OrbState.reading) const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
               if (_text.isNotEmpty && _paras.length < 3) SelectableText(_text, style: const TextStyle(color: kInk, fontSize: 28, height: 1.35, fontWeight: FontWeight.w700)),
               if (_paras.length >= 3) ...[
@@ -475,6 +549,13 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                     ),
                     if (_text.isNotEmpty) ...[
                       const SizedBox(width: 12),
+                      IconButton.filled(
+                        onPressed: _busy ? null : _ask,
+                        icon: Icon(_asking ? Icons.graphic_eq : Icons.mic, size: 30),
+                        tooltip: 'Ask about this',
+                        style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: _asking ? const Color(0xFFB3261E) : kPrimary, foregroundColor: Colors.white),
+                      ),
+                      const SizedBox(width: 10),
                       IconButton.filled(
                         onPressed: _listenAgain,
                         icon: const Icon(Icons.volume_up, size: 30),

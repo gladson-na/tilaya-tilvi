@@ -195,7 +195,8 @@ def test_native_script_greeting():
 def test_duplicate_piece_not_reprocessed(monkeypatch):
     from tilda import server
     monkeypatch.setenv("TILDA_FAKE", "1")
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     monkeypatch.setattr(server, "to_wav", lambda raw: __import__("tempfile").NamedTemporaryFile(delete=False).name)
     import io
     r1 = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p1", "lang": "hi-IN"}).get_json()
@@ -209,7 +210,8 @@ def test_rate_limit(monkeypatch):
     from tilda import server
     monkeypatch.setenv("TILDA_RATE_PER_MIN", "2")
     server._HITS.clear()
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     codes = [c.post("/act", json={"text": "hi"}).status_code for _ in range(4)]
     assert codes[:2] == [200, 200] and codes[-1] == 429
 
@@ -291,7 +293,8 @@ def test_talk_stream_speaks_sentence_by_sentence(monkeypatch):
 
 def test_health_wakes_server():
     from tilda import server
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     r = c.get("/health")
     assert r.status_code == 200 and r.data == b"ok"
 
@@ -419,7 +422,8 @@ def test_feedback_is_kept_and_complaint_detected(tmp_path, monkeypatch):
     monkeypatch.setenv("FEEDBACK_LOG", str(tmp_path / "f.jsonl"))
     got = tools.context_for([{"role": "user", "content": "I have a complaint about the app"}])
     assert got["intent"] == "complaint" and "never promise" in got["extra"]
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     r = c.post("/feedback", json={"kind": "suggestion", "text": "add Odia notes", "lang": "od-IN"})
     assert r.get_json()["saved"] is True
     assert "add Odia notes" in (tmp_path / "f.jsonl").read_text()
@@ -474,7 +478,8 @@ def test_system_prompt_carries_live_data_and_time():
 def test_summary_route(monkeypatch):
     from tilda import server
     monkeypatch.setattr(server.tools, "summarize", lambda t, n: f"Notes in {n}\n- point")
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     assert c.post("/summary", json={"text": "short"}).status_code == 400
     r = c.post("/summary", json={"text": "a long class about photosynthesis in plants " * 3, "lang": "hi-IN"})
     assert r.get_json()["text"].startswith("Notes in Hindi")
@@ -559,7 +564,8 @@ def test_read_image_needs_key_and_parses_answer(monkeypatch):
         def json(self):
             return {"choices": [{"message": {"content": '{"original": "Exit", "translation": "बाहर निकलें"}'}}]}
     monkeypatch.setattr(tools.requests, "post", lambda *a, **k: R())
-    assert tools.read_image("QUJD", "Hindi") == {"original": "Exit", "text": "बाहर निकलें"}
+    monkeypatch.setattr(tools, "_faithful", lambda *a: "")
+    assert tools.read_image("QUJD", "Hindi", "hi-IN") == {"original": "Exit", "text": "बाहर निकलें", "facts": ""}
 
 
 def test_clean_tail_drops_invented_hello_only_after_a_full_sentence():
@@ -639,7 +645,8 @@ def test_photo_reading_calls_a_vision_model_that_still_exists(monkeypatch):
         seen.append(kw["json"])
         return _GR(200, '{"original": "Take one", "translation": "एक लें"}')
     monkeypatch.setattr(tools.requests, "post", fake)
-    assert tools.read_image("QUJD", "Hindi")["text"] == "एक लें"
+    monkeypatch.setattr(tools, "_faithful", lambda *a: "")
+    assert tools.read_image("QUJD", "Hindi", "hi-IN")["text"] == "एक लें"
     assert seen[0]["model"] == "qwen/qwen3.8-27b"
     assert seen[0]["messages"][0]["content"][1]["type"] == "image_url"
 
@@ -711,7 +718,8 @@ def test_cached_piece_is_not_shared_between_phones(monkeypatch):
     monkeypatch.setenv("TILDA_FAKE", "1")
     monkeypatch.setattr(server, "to_wav", lambda raw: tempfile.NamedTemporaryFile(delete=False).name)
     server._DONE.clear()
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     a = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p9", "lang": "hi-IN"},
                headers={"X-Forwarded-For": "1.1.1.1"}).get_json()
     key = [k for k in server._DONE if k.endswith("|p9")][0]
@@ -728,14 +736,16 @@ def test_detected_language_is_reported(monkeypatch):
     monkeypatch.setattr(server, "to_wav", lambda raw: tempfile.NamedTemporaryFile(delete=False).name)
     monkeypatch.setattr(server, "chains", lambda: ([], []))
     monkeypatch.setattr(server, "transcribe", lambda wav, lang, chain, timeout=8, hints="": (Result("namaste", "x", language="hi-IN"), []))
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     r = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "lang": "unknown"}).get_json()
     assert r["language"] == "hi-IN"
 
 
 def test_bad_requests_get_clean_errors_not_crashes():
     from tilda import server
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     assert c.post("/translate", data="[1,2]", content_type="application/json").status_code in (200, 502)
     assert c.post("/chat", data="[1,2]", content_type="application/json").status_code in (200, 502)
     assert c.post("/transcribe", data={"lang": "hi-IN"}).status_code == 400
@@ -758,7 +768,8 @@ def test_rotating_fake_addresses_hit_the_global_limit(monkeypatch):
     monkeypatch.setenv("TILDA_GLOBAL_PER_MIN", "3")
     monkeypatch.setenv("TILDA_RATE_PER_MIN", "100")
     server._HITS.clear(); server._ALL.clear()
-    c = server.app.test_client()
+    import tilda.server as srv
+    c = srv.app.test_client()
     codes = [c.post("/act", json={"text": "hi"}, headers={"X-Forwarded-For": f"9.9.9.{i}"}).status_code for i in range(5)]
     assert codes[:3] == [200] * 3 and codes[3] == 429
     server._ALL.clear()
@@ -796,3 +807,47 @@ def test_plain_chat_is_not_searched(monkeypatch):
         raise AssertionError("should not search")
     monkeypatch.setattr(tools, "web_answer", boom)
     assert tools.context_for([{"role": "user", "content": "thank you so much"}])["intent"] is None
+
+
+def test_clean_label_removes_loops_and_empty_paragraphs():
+    t = "Maggi\n\n*No Added\n*No Added\n*No Added\n\n\n\n*No Added\n\nSalt 6.5g"
+    assert tools.clean_label(t) == "Maggi\n\n*No Added\n\nSalt 6.5g"
+
+
+def test_label_facts_only_when_ingredients_are_present():
+    assert tools.label_facts("Maggi 2-Minute Noodles masala taste") == ""
+    assert "not listed" in tools.label_facts("Ingredients: wheat flour, salt")
+    assert "listed in the ingredients" in tools.label_facts("Ingredients: wheat flour, palm oil, salt")
+
+
+def test_faithful_translation_keeps_paragraphs(monkeypatch):
+    import tilda.translate as tr
+    monkeypatch.setattr(tr, "translate", lambda t, s, g, k=None: "T:" + t)
+    assert tools._faithful("100% Vegetarian\n\nSalt 6.5g", "hi-IN", "Hindi") == "T:100% Vegetarian\n\nT:Salt 6.5g"
+
+
+def test_ask_route_demo_and_input_check(monkeypatch):
+    monkeypatch.setenv("TILDA_FAKE", "1")
+    import tilda.server as srv
+    c = srv.app.test_client()
+    assert c.post("/ask", json={"question": "", "lang": "en-IN"}).status_code == 400
+    assert "Rs" in c.post("/ask", json={"question": "what is the price", "label": "Maggi"}).get_json()["text"]
+
+
+def test_product_answer_forbids_harm_opinions(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    seen = []
+    monkeypatch.setattr(tools.groq, "chat", lambda msgs, *a, **k: seen.append(msgs[0]["content"]) or "ok")
+    assert tools.product_answer("price?", "Maggi", "Hindi") == "ok"
+    assert "Never say" in seen[0] and "Maggi" in seen[0]
+
+
+def test_relabel_route(monkeypatch):
+    import tilda.server as srv
+    c = srv.app.test_client()
+    assert c.post("/relabel", json={"original": "", "lang": "hi-IN"}).status_code == 400
+    monkeypatch.setenv("TILDA_FAKE", "1")
+    assert c.post("/relabel", json={"original": "Salt", "lang": "hi-IN"}).get_json()["text"].endswith("Salt")
+    monkeypatch.delenv("TILDA_FAKE")
+    monkeypatch.setattr(tools, "_faithful", lambda *a: "नमक\n\nचीनी")
+    assert c.post("/relabel", json={"original": "Salt\n\nSugar", "lang": "hi-IN"}).get_json()["text"] == "नमक\n\nचीनी"
