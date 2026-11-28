@@ -69,6 +69,8 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
   List<String> _queue = []; // every call to practise, each three times
   int _i = 0;
   bool _practising = false;
+  bool _allDone = false; // all tries finished: show the saved screen with a Done button
+  final _cnt = <String, int>{};
   bool _listening = false;
   String _heard = '';
   String _note = '';
@@ -90,6 +92,17 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
     return l == 'od-IN' ? 'or-IN' : l;
   }
 
+  /// Saves the choice and the practice, then shows the "all set" screen. Nothing is lost if the person leaves now.
+  Future<void> _save() async {
+    final s = widget.style;
+    s.callWords
+      ..clear()
+      ..addAll(_picked.isEmpty ? {'hey'} : _picked);
+    s.callDone = true;
+    await s.save();
+    if (mounted) setState(() => _allDone = true);
+  }
+
   Future<void> _finish() async {
     final s = widget.style;
     s.callWords
@@ -104,6 +117,8 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
     _queue = [for (final k in _picked) ...List.filled(3, k)];
     setState(() {
       _practising = true;
+      _allDone = false;
+      _cnt.clear();
       _i = 0;
       _heard = '';
       _note = '';
@@ -128,14 +143,22 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
           _listening = false;
           _heard = t;
           if (good) {
-            _note = 'Got it.';
+            final k = _queue[_i];
+            final n = (_cnt[k] ?? 0) + 1;
+            _cnt[k] = n;
+            if (n >= 3) {
+              widget.style.callTrained.add(k);
+              _note = 'Got it. "${CallWords.label(k)} Tilda" is ready.';
+            } else {
+              _note = 'Got it.';
+            }
             _i++;
           } else {
             _note = 'I did not catch Tilda. Please say it again.';
           }
         });
         if (good) await widget.style.save();
-        if (_i >= _queue.length) await _finish();
+        if (_i >= _queue.length) await _save();
       },
       onEnd: (why) {
         if (!mounted) return;
@@ -157,7 +180,7 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
-            child: _practising ? _practice() : _choose(),
+            child: _allDone ? _saved() : (_practising ? _practice() : _choose()),
           ),
         ),
       );
@@ -166,10 +189,13 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
         const Text('How do you call Tilda?', style: TextStyle(color: kInk, fontSize: 28, fontWeight: FontWeight.w800, height: 1.15)),
         const SizedBox(height: 6),
         const Text('Like you call a friend: "Ae Suresh". Pick the ones you use.', style: TextStyle(color: kSub, fontSize: 17, height: 1.35)),
-        const SizedBox(height: 18),
+        const SizedBox(height: 6),
+        const Text('A tick means you practised it three times, so it will work.', style: TextStyle(color: kSub, fontSize: 15)),
+        const SizedBox(height: 14),
         Wrap(spacing: 10, runSpacing: 10, children: [
           for (final e in CallWords.options.entries)
             FilterChip(
+              avatar: widget.style.callTrained.contains(e.key) ? const Icon(Icons.check_circle, color: kPrimary, size: 22) : null,
               label: Text('${e.value} Tilda', style: const TextStyle(fontSize: 19)),
               selected: _picked.contains(e.key),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
@@ -186,6 +212,31 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
           ),
         ),
         TextButton(onPressed: _finish, child: const Text('Skip for now', style: TextStyle(color: kSub, fontSize: 16))),
+      ]);
+
+  Widget _saved() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const SizedBox(height: 20),
+        const Icon(Icons.check_circle, color: kPrimary, size: 64),
+        const SizedBox(height: 12),
+        const Text('All set. Saved.', style: TextStyle(color: kInk, fontSize: 30, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 6),
+        const Text('You can call Tilda with these, any time:', style: TextStyle(color: kSub, fontSize: 18)),
+        const SizedBox(height: 16),
+        for (final k in _picked)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(children: [
+              Icon(widget.style.callTrained.contains(k) ? Icons.check_circle : Icons.circle_outlined, color: kPrimary),
+              const SizedBox(width: 12),
+              Text('${CallWords.label(k)} Tilda', style: const TextStyle(color: kInk, fontSize: 22, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        const Spacer(),
+        SizedBox(
+          width: double.infinity,
+          height: 58,
+          child: FilledButton(onPressed: widget.onDone, child: const Text('Done', style: TextStyle(fontSize: 20))),
+        ),
       ]);
 
   Widget _practice() {

@@ -14,7 +14,7 @@ import 'screen_capture.dart';
 import 'widgets.dart';
 
 final _needsPlace = RegExp(
-    r'weather|temperature|rain|how far|distance|far is|how long|मौसम|बारिश|तापमान|दूर|दूरी|ପାଗ|ଦୂର|వాతావరణ|దూరం|வானிலை|தூரம்|ಹವಾಮಾನ|ದೂರ|കാലാവസ്ഥ|ദൂരം|আবহাওয়া|দূর|હવામાન|અંતર|ਮੌਸਮ|ਦੂਰੀ',
+    r'weather|temperature|rain|how far|distance|far is|how long|near|nearest|closest|around here|hospital|clinic|pharmacy|restaurant|hotel|atm|petrol|पास में|नज़दीक|नजदीक|आसपास|अस्पताल|मौसम|बारिश|तापमान|दूर|दूरी|ପାଗ|ଦୂର|వాతావరణ|దూరం|வானிலை|தூரம்|ಹವಾಮಾನ|ದೂರ|കാലാവസ്ഥ|ദൂരം|আবহাওয়া|দূর|હવામાન|અંતર|ਮੌਸਮ|ਦੂਰੀ',
     caseSensitive: false);
 
 /// One open conversation: talk or type, Tilda answers out loud and in writing.

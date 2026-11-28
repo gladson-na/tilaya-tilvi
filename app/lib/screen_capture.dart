@@ -231,6 +231,38 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     } catch (_) {}
   }
 
+  /// A new language was picked after the photo: translate the words, show them, and read them out.
+  Future<void> _retranslate() async {
+    final src = _original.isNotEmpty ? _original : _text;
+    if (src.trim().isEmpty || _busy) return;
+    final my = ++_rg;
+    await _player.stop();
+    await _tts.stop();
+    final lang = _lang;
+    _set(() {
+      _orb = OrbState.reading;
+      _error = '';
+    });
+    try {
+      final t = (await Api.translate(src, 'auto', lang)).trim();
+      if (t.isEmpty) throw Exception('empty');
+      if (my != _rg || !mounted) return;
+      _set(() {
+        _text = t;
+        _paras = _split(t);
+        _sel = -1;
+        _orb = OrbState.idle;
+      });
+      if (_paras.length < 3) await _say(t);
+    } catch (_) {
+      if (my != _rg || !mounted) return;
+      _set(() {
+        _orb = OrbState.idle;
+        _error = 'I could not translate it into ${kLangs[lang] ?? lang} just now. Please check the internet and tap the language again.';
+      });
+    }
+  }
+
   List<String> _split(String t) => t.split(RegExp(r'\n\s*\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 
   /// Reads the chosen pieces one after another, and stops if the person chooses something else.
@@ -311,7 +343,10 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                 backgroundColor: kMint,
                 side: BorderSide.none,
                 showCheckmark: false,
-                onSelected: (_) => _set(() => _lang = e.key),
+                onSelected: (_) {
+                _set(() => _lang = e.key);
+                _retranslate();
+              },
               ),
             ),
         ]),
