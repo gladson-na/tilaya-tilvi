@@ -163,11 +163,9 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
       );
 
   Widget _choose() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Center(child: TildaOrb(state: OrbState.idle, size: 110)),
-        const SizedBox(height: 10),
-        const Text('How do you call Tilda?', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w700)),
+        const Text('How do you call Tilda?', style: TextStyle(color: kInk, fontSize: 28, fontWeight: FontWeight.w800, height: 1.15)),
         const SizedBox(height: 6),
-        const Text('Like you call a friend: "Ae Suresh". Pick the ones you use.', style: TextStyle(color: Colors.white70, fontSize: 17, height: 1.35)),
+        const Text('Like you call a friend: "Ae Suresh". Pick the ones you use.', style: TextStyle(color: kSub, fontSize: 17, height: 1.35)),
         const SizedBox(height: 18),
         Wrap(spacing: 10, runSpacing: 10, children: [
           for (final e in CallWords.options.entries)
@@ -187,7 +185,7 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
             child: Text(_picked.isEmpty ? 'Pick at least one' : 'Practise ${_picked.length * 3} times', style: const TextStyle(fontSize: 19)),
           ),
         ),
-        TextButton(onPressed: _finish, child: const Text('Skip for now', style: TextStyle(color: Colors.white60, fontSize: 16))),
+        TextButton(onPressed: _finish, child: const Text('Skip for now', style: TextStyle(color: kSub, fontSize: 16))),
       ]);
 
   Widget _practice() {
@@ -198,24 +196,28 @@ class _CallWordsScreenState extends State<CallWordsScreen> {
       const SizedBox(height: 10),
       TildaOrb(state: _listening ? OrbState.listening : OrbState.idle, size: 150),
       const SizedBox(height: 18),
-      Text('Say: ${CallWords.label(key)} Tilda', style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w700)),
+      Text('Say: ${CallWords.label(key)} Tilda', style: const TextStyle(color: kInk, fontSize: 30, fontWeight: FontWeight.w800)),
       const SizedBox(height: 8),
-      Text('Try $round of 3', style: const TextStyle(color: Colors.white60, fontSize: 18)),
+      Text('Try $round of 3', style: const TextStyle(color: kSub, fontSize: 18)),
       const SizedBox(height: 24),
-      if (_heard.isNotEmpty) Text(_heard, textAlign: TextAlign.center, style: const TextStyle(color: kTeal, fontSize: 24)),
+      if (_heard.isNotEmpty) Text(_heard, textAlign: TextAlign.center, style: const TextStyle(color: kPrimary, fontSize: 24, fontWeight: FontWeight.w700)),
       const SizedBox(height: 8),
-      if (_note.isNotEmpty) Text(_note, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 17)),
+      if (_note.isNotEmpty) Text(_note, textAlign: TextAlign.center, style: const TextStyle(color: kSub, fontSize: 17)),
       const Spacer(),
-      GestureDetector(
-        onTap: _say,
-        child: Container(
-          width: 84,
-          height: 84,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: _listening ? Colors.redAccent : kBlue),
-          child: Icon(_listening ? Icons.graphic_eq : Icons.mic, color: Colors.white, size: 40),
+      Semantics(
+        button: true,
+        label: _listening ? 'Listening' : 'Say it now',
+        child: GestureDetector(
+          onTap: _say,
+          child: Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: _listening ? const Color(0xFFB3261E) : kPrimary),
+            child: Icon(_listening ? Icons.graphic_eq : Icons.mic, color: Colors.white, size: 40),
+          ),
         ),
       ),
-      TextButton(onPressed: _finish, child: const Text('Skip for now', style: TextStyle(color: Colors.white60, fontSize: 16))),
+      TextButton(onPressed: _finish, child: const Text('Skip for now', style: TextStyle(color: kSub, fontSize: 16))),
     ]);
   }
 }

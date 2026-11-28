@@ -103,12 +103,9 @@ class TildaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Tilda',
-        theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
-        darkTheme: ThemeData(
-            colorSchemeSeed: Colors.teal,
-            brightness: Brightness.dark,
-            useMaterial3: true),
-        themeMode: ThemeMode.dark,
+        debugShowCheckedModeBanner: false,
+        theme: tildaTheme(),
+        themeMode: ThemeMode.light,
         home: const HomePage(),
       );
 }
@@ -232,6 +229,7 @@ class _HomePageState extends State<HomePage> {
         }
         if (c.method == 'toggle') _bubbleToggle();
         if (c.method == 'longpress') _nextLiveLang();
+        if (c.method == 'notesCtl') await NotesCtl.handler?.call(c.arguments as String);
       });
     }
     _tts.awaitSpeakCompletion(true);
@@ -314,16 +312,28 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _bubbleToggle() {
-    unawaited(_wake());
-    if (_liveSession) {
-      _stopLive();
-    } else if (_recording) {
-      _stop();
-    } else if (_liveOn && Platform.isAndroid && !_talk) {
-      _startLive();
-    } else {
-      _bubbleSession = true;
-      _start();
+    unawaited(_bubbleToggleSafe());
+  }
+
+  Future<void> _bubbleToggleSafe() async {
+    try {
+      unawaited(_wake());
+      if (_liveSession) {
+        await _stopLive();
+      } else if (_recording) {
+        await _stop();
+      } else if (_liveOn && Platform.isAndroid && !_talk) {
+        await _startLive();
+      } else {
+        _bubbleSession = true;
+        await _start();
+      }
+    } catch (e) {
+      _recording = false;
+      _liveSession = false;
+      _native.invokeMethod('label', '!').catchError((_) => false);
+      _tellBubble('nothing');
+      if (mounted) setState(() => _info = 'The bubble could not start: $e');
     }
   }
 
@@ -491,6 +501,8 @@ class _HomePageState extends State<HomePage> {
     }
     if (!await _recorder.hasPermission()) {
       setState(() => _info = 'Microphone permission is needed.');
+      _native.invokeMethod('label', 'Mic?').catchError((_) => false);
+      _tellBubble('nothing');
       return;
     }
     _sess = DateTime.now().millisecondsSinceEpoch;
@@ -944,160 +956,198 @@ class _HomePageState extends State<HomePage> {
       } catch (_) {}
     }
     if (!mounted) return;
+    Widget section(String t) => Padding(
+          padding: const EdgeInsets.fromLTRB(4, 20, 4, 6),
+          child: Text(t, style: const TextStyle(color: kSub, fontSize: 14, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+        );
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      backgroundColor: kBg,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) => Padding(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
           child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              TextField(controller: _url, decoration: const InputDecoration(labelText: 'Server address')),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('My languages'),
-                subtitle: Text(_style.myLangs.map((c) => _targets[c] ?? c).join(', ')),
-                trailing: TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _style.setupDone = false;
-                    setState(() {});
-                  },
-                  child: const Text('Change'),
-                ),
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('How I call Tilda'),
-                subtitle: Text(_style.callWords.map(CallWords.label).join(', ')),
-                trailing: TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _style.callDone = false;
-                    setState(() {});
-                  },
-                  child: const Text('Change'),
-                ),
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Slow internet mode'),
-                subtitle: const Text('Sends much less data and speaks with the phone\'s voice. Tilda also switches this on by herself when the network is slow.'),
-                value: Api.saver,
-                onChanged: (v) => setSheet(() => Api.saver = v),
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Old test screen'),
-                subtitle: const Text('The first version, for checking things.'),
-                trailing: TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _openClassic();
-                  },
-                  child: const Text('Open'),
-                ),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 4), child: Text('Settings', style: TextStyle(color: kInk, fontSize: 26, fontWeight: FontWeight.w800))),
+              section('YOU'),
+              TildaCard(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Column(children: [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('My languages'),
+                    subtitle: Text(_style.myLangs.map((c) => _targets[c] ?? c).join(', ')),
+                    trailing: TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _style.setupDone = false;
+                        setState(() {});
+                      },
+                      child: const Text('Change'),
+                    ),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('How I call Tilda'),
+                    subtitle: Text(_style.callWords.map(CallWords.label).join(', ')),
+                    trailing: TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _style.callDone = false;
+                        setState(() {});
+                      },
+                      child: const Text('Change'),
+                    ),
+                  ),
+                ]),
               ),
               if (Platform.isAndroid) ...[
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(_nativeOn ? 'Typing into other apps: on' : 'Typing into other apps: off'),
-                  subtitle: const Text('Turn on "Tilda typing" in Accessibility. If it is greyed out: App info, three dots, Allow restricted settings.'),
-                  trailing: TextButton(
-                    onPressed: () => _native.invokeMethod('settings'),
-                    child: const Text('Open'),
-                  ),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Bubble only on text boxes'),
-                  subtitle: const Text('Shows when you tap a text box in any app, hides after.'),
-                  value: _autoBubble,
-                  onChanged: (v) {
-                    setSheet(() => _autoBubble = v);
-                    _native.invokeMethod('auto', v).catchError((_) {});
-                  },
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Live words (instant)'),
-                  subtitle: const Text('Types and hears each word as you say it, using the phone\'s own speech engine. Free, no server.'),
-                  value: _liveOn,
-                  onChanged: (v) => setSheet(() => _liveOn = v),
-                ),
-                if (_liveOn)
-                  DropdownButton<String>(
-                    isExpanded: true,
-                    value: _targets.containsKey(_liveBase()) ? _liveBase() : 'en-IN',
-                    items: [for (final e in _targets.entries) DropdownMenuItem(value: e.key, child: Text('Live language: ${e.value}'))],
-                    onChanged: (v) => setSheet(() => _liveLang = v ?? _liveLang),
-                  ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Read it back to me'),
-                  subtitle: const Text('Speaks the typed text aloud so you can check it by ear.'),
-                  value: _readBack,
-                  onChanged: (v) => setSheet(() => _readBack = v),
+                section('TYPING IN OTHER APPS'),
+                TildaCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: Column(children: [
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(_nativeOn ? 'Voice bubble is on' : 'Voice bubble is off'),
+                      subtitle: Text(_nativeOn ? 'A mic bubble appears when you tap a text box.' : 'Turn on "Tilda typing" in Accessibility. If it is greyed out: App info, three dots, Allow restricted settings.'),
+                      trailing: TextButton(onPressed: () => _native.invokeMethod('settings'), child: Text(_nativeOn ? 'Manage' : 'Turn on')),
+                    ),
+                    const Divider(),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Only show on text boxes'),
+                      value: _autoBubble,
+                      onChanged: (v) {
+                        setSheet(() => _autoBubble = v);
+                        _native.invokeMethod('auto', v).catchError((_) {});
+                      },
+                    ),
+                    const Divider(),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Type words as I say them'),
+                      subtitle: const Text('Uses the phone\'s own speech engine. Free.'),
+                      value: _liveOn,
+                      onChanged: (v) => setSheet(() => _liveOn = v),
+                    ),
+                    if (_liveOn)
+                      DropdownButton<String>(
+                        isExpanded: true,
+                        value: _targets.containsKey(_liveBase()) ? _liveBase() : 'en-IN',
+                        items: [for (final e in _targets.entries) DropdownMenuItem(value: e.key, child: Text('Language: ${e.value}'))],
+                        onChanged: (v) => setSheet(() => _liveLang = v ?? _liveLang),
+                      ),
+                    const Divider(),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Read it back to me'),
+                      subtitle: const Text('Speaks the typed text so you can check it by ear.'),
+                      value: _readBack,
+                      onChanged: (v) => setSheet(() => _readBack = v),
+                    ),
+                  ]),
                 ),
               ],
-              const Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('Languages I speak'))),
-              Wrap(spacing: 8, children: [
-                for (final e in const {
-                  'hi-IN': 'Hindi', 'od-IN': 'Odia', 'en-IN': 'English', 'bn-IN': 'Bengali', 'te-IN': 'Telugu',
-                  'ta-IN': 'Tamil', 'kn-IN': 'Kannada', 'ml-IN': 'Malayalam', 'mr-IN': 'Marathi',
-                  'gu-IN': 'Gujarati', 'pa-IN': 'Punjabi'
-                }.entries)
-                  FilterChip(
-                    label: Text(e.value),
-                    selected: _style.myLangs.contains(e.key),
-                    onSelected: (v) async {
-                      setSheet(() => v ? _style.myLangs.add(e.key) : _style.myLangs.remove(e.key));
+              section('CONNECTION'),
+              TildaCard(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Slow internet mode'),
+                  subtitle: const Text('Sends less data and uses the phone\'s voice. Tilda also turns it on by herself when the network is slow.'),
+                  value: Api.saver,
+                  onChanged: (v) => setSheet(() => Api.saver = v),
+                ),
+              ),
+              section('PRIVACY'),
+              TildaCard(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Column(children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Use my word list as a hint'),
+                    subtitle: Text('Your own names and words help the engines. Sent with each recording only, never stored. ${_style.vocab.length} word(s).'),
+                    value: _style.shareHints,
+                    onChanged: (v) async {
+                      setSheet(() => _style.shareHints = v);
                       await _style.save();
+                      setState(() {});
                     },
                   ),
-              ]),
-              if (!_asr.ready)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: OutlinedButton(
-                    onPressed: _dl == null ? _downloadModel : null,
-                    child: Text(_dl == null
-                        ? 'Download offline model (about 150 MB, once)'
-                        : 'Downloading ${(_dl! * 100).round()}%'),
+                  const Divider(),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Learn my voice on this phone'),
+                    subtitle: const Text('Keeps the recordings you review, only on this phone.'),
+                    value: _style.keepAudio,
+                    onChanged: (v) async {
+                      setSheet(() => _style.keepAudio = v);
+                      await _style.save();
+                      setState(() {});
+                    },
+                  ),
+                  const Divider(),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: () async {
+                        await _style.forget();
+                        setState(() {
+                          _refreshText();
+                          _info = 'Forgot everything it learned about you.';
+                        });
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      },
+                      child: const Text('Forget everything learned about me'),
+                    ),
+                  ),
+                ]),
+              ),
+              section('ADVANCED'),
+              TildaCard(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Theme(
+                  data: Theme.of(ctx).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: const EdgeInsets.only(bottom: 8),
+                    title: const Text('For testing'),
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Remove Notes demo limit'),
+                        subtitle: Text('Notes stops after ${Api.demoMinutes} minutes to protect the free credits. Turn this on for long recordings. It switches off again when the app restarts.'),
+                        value: Api.noLimit,
+                        onChanged: (v) => setSheet(() => Api.noLimit = v),
+                      ),
+                      TextField(controller: _url, decoration: const InputDecoration(labelText: 'Server address')),
+                      if (!_asr.ready)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: OutlinedButton(
+                            onPressed: _dl == null ? _downloadModel : null,
+                            child: Text(_dl == null ? 'Download offline model (about 150 MB, once)' : 'Downloading ${(_dl! * 100).round()}%'),
+                          ),
+                        ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Test screen'),
+                        subtitle: const Text('The first version, for checking things.'),
+                        trailing: TextButton(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _openClassic();
+                          },
+                          child: const Text('Open'),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Send my word list as a hint'),
-                subtitle: Text('Your own names and words help the engines. Sent with each recording only, never stored. ${_style.vocab.length} word(s).'),
-                value: _style.shareHints,
-                onChanged: (v) async {
-                  setSheet(() => _style.shareHints = v);
-                  await _style.save();
-                  setState(() {});
-                },
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Train a private model of my voice'),
-                subtitle: const Text('Keeps the recordings you review, only on this phone.'),
-                value: _style.keepAudio,
-                onChanged: (v) async {
-                  setSheet(() => _style.keepAudio = v);
-                  await _style.save();
-                  setState(() {});
-                },
-              ),
-              TextButton(
-                onPressed: () async {
-                  await _style.forget();
-                  setState(() {
-                    _refreshText();
-                    _info = 'Forgot everything it learned about you.';
-                  });
-                  if (ctx.mounted) Navigator.pop(ctx);
-                },
-                child: const Text('Forget everything learned about me'),
               ),
             ]),
           ),

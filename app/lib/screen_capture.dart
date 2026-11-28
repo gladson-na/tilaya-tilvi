@@ -34,6 +34,9 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   String _text = '', _original = '', _error = '';
   Uint8List? _photo;
   bool _busy = false;
+  List<String> _paras = []; // the text split into paragraphs, for choosing what to hear
+  int _sel = -1;
+  int _rg = 0; // bumped to stop a long read-out
   bool _flash = false;
 
   @override
@@ -42,6 +45,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     WidgetsBinding.instance.addObserver(this);
     final mine = widget.style.myLangs.where(kLangs.containsKey).toList();
     _lang = mine.isNotEmpty ? mine.first : 'en-IN';
+    Api.wake().ignore(); // the free server sleeps when idle: wake it while the camera opens
     _openCamera();
   }
 
@@ -124,6 +128,8 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       }
       _set(() {
         _photo = bytes;
+        _paras = [];
+        _sel = -1;
         _text = '';
         _original = '';
         _error = '';
@@ -131,10 +137,16 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       });
       Map<String, dynamic> j;
       try {
-        j = await Api.readPhoto(base64Encode(bytes), _lang);
-      } catch (_) {
-        // No internet or the server is busy: read the words on the phone itself (Hindi, Marathi and English).
-        await _readOffline(x.path, bytes);
+        try {
+          j = await Api.readPhoto(base64Encode(bytes), _lang);
+        } catch (_) {
+          // the server may have been asleep: wake it and try once more before giving up
+          await Api.wake();
+          j = await Api.readPhoto(base64Encode(bytes), _lang);
+        }
+      } catch (e) {
+        // No internet or the reader is busy: read the words on the phone itself, and say why
+        await _readOffline(x.path, bytes, why: _why(e));
         return;
       }
       final t = (j['text'] ?? '') as String;
@@ -142,11 +154,14 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       _set(() {
         _text = t;
         _original = o;
-        _error = t.isEmpty ? 'I could not find any words in that photo. Please try again, closer and in good light.' : '';
+        _paras = _split(t);
+        _sel = -1;
+        _error = t.isEmpty ? 'I could not find any words. Move the phone closer, hold it steady, and use more light.' : '';
         _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
       });
       if (t.isNotEmpty) await _keep(bytes, t, o);
-      await _say(t.isEmpty ? _error : t);
+      // a long page (a newspaper, a leaflet): do not read it all at once, let the person choose what to hear
+      if (_paras.length < 3) await _say(t.isEmpty ? _error : t);
     } catch (_) {
       _set(() => _error = 'I could not read that just now. Please check the internet and try again.');
     } finally {
@@ -160,11 +175,21 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
       final id = Store.newId();
       final name = await Store.savePhoto(id, bytes);
       final first = text.trim().split(RegExp(r'\s+')).take(7).join(' ');
-      await Store.put(SavedItem(id: id, kind: 'photo', title: first, lang: _lang, photo: name, parts: {'text': text, 'original': original}));
+      final ok = await Store.put(SavedItem(id: id, kind: 'photo', title: first, lang: _lang, photo: name, parts: {'text': text, 'original': original}));
+      if (!ok) _set(() => _error = Store.lastError ?? 'Could not save this photo.');
     } catch (_) {}
   }
 
-  Future<void> _readOffline(String path, Uint8List bytes) async {
+  /// A short, plain reason for a failed online read.
+  String _why(Object e) {
+    final m = e.toString();
+    if (m.contains('SocketException') || m.contains('Failed host lookup') || m.contains('ClientException')) return 'no internet';
+    if (m.contains('Timeout')) return 'the server was too slow';
+    if (m.contains('key not set')) return 'the reader is not switched on';
+    return 'the online reader is busy';
+  }
+
+  Future<void> _readOffline(String path, Uint8List bytes, {String why = 'no internet'}) async {
     final rec = TextRecognizer(script: TextRecognitionScript.devanagiri);
     try {
       final r = await rec.processImage(InputImage.fromFilePath(path));
@@ -174,8 +199,8 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
         _text = t;
         _original = '';
         _error = t.isEmpty
-            ? 'No internet, and I could not read any Hindi or English words in that photo. Try closer, in good light.'
-            : 'No internet: reading the words as written, without translation.';
+            ? 'The online reader did not answer ($why), and I could not read any words on the phone. Move the phone closer, hold it steady, and use more light.'
+            : 'The online reader did not answer ($why). Reading the words as written, without translation.';
         _orb = t.isEmpty ? OrbState.idle : OrbState.speaking;
       });
       if (t.isNotEmpty) {
@@ -206,17 +231,66 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
     } catch (_) {}
   }
 
+  List<String> _split(String t) => t.split(RegExp(r'\n\s*\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+
+  /// Reads the chosen pieces one after another, and stops if the person chooses something else.
+  Future<void> _sayParts(List<String> parts, {int? mark}) async {
+    final my = ++_rg;
+    await _player.stop();
+    await _tts.stop();
+    for (var i = 0; i < parts.length; i++) {
+      if (my != _rg || !mounted) return;
+      _set(() {
+        _orb = OrbState.speaking;
+        if (mark != null) _sel = mark + i;
+      });
+      await _say(parts[i]);
+    }
+    if (my == _rg) _set(() => _orb = OrbState.idle);
+  }
+
+  Future<void> _summarise() async {
+    final my = ++_rg;
+    await _player.stop();
+    await _tts.stop();
+    _set(() {
+      _orb = OrbState.reading;
+      _sel = -1;
+    });
+    String s = '';
+    try {
+      s = await Api.summary(_text, _lang);
+    } catch (_) {}
+    if (my != _rg || !mounted) return;
+    if (s.trim().isEmpty) {
+      _set(() {
+        _orb = OrbState.idle;
+        _error = 'I could not make a short version just now. Please try again.';
+      });
+      return;
+    }
+    _set(() => _error = '');
+    await _sayParts([s.trim()]);
+  }
+
   Future<void> _listenAgain() async {
     if (_text.isEmpty) return;
+    if (_paras.length >= 3) {
+      await _sayParts(_paras, mark: 0);
+      return;
+    }
     _set(() => _orb = OrbState.speaking);
     await _say(_text);
     _set(() => _orb = OrbState.idle);
   }
 
   void _again() {
+    _rg++;
     _player.stop();
     _tts.stop();
     _set(() {
+      _paras = [];
+      _sel = -1;
       _photo = null;
       _text = _original = _error = '';
       _orb = OrbState.idle;
@@ -231,10 +305,10 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
-                label: Text(e.value, style: TextStyle(fontSize: 16, color: _lang == e.key ? Colors.black : Colors.white)),
+                label: Text(e.value, style: TextStyle(fontSize: 16, color: _lang == e.key ? Colors.white : kInk)),
                 selected: _lang == e.key,
-                selectedColor: kTeal,
-                backgroundColor: Colors.black54,
+                selectedColor: kPrimary,
+                backgroundColor: kMint,
                 side: BorderSide.none,
                 showCheckmark: false,
                 onSelected: (_) => _set(() => _lang = e.key),
@@ -246,25 +320,88 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   Widget _live() {
     final c = _cam;
     if (_camError.isNotEmpty) {
-      return Center(child: Padding(padding: const EdgeInsets.all(32), child: Text(_camError, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 20, height: 1.4))));
+      return Center(child: Padding(padding: const EdgeInsets.all(32), child: Text(_camError, textAlign: TextAlign.center, style: const TextStyle(color: kSub, fontSize: 20, height: 1.4))));
     }
     if (c == null || !c.value.isInitialized) return const Center(child: CircularProgressIndicator());
-    return Center(child: CameraPreview(c));
+    return Stack(alignment: Alignment.topCenter, children: [
+      Center(child: CameraPreview(c)),
+      Positioned(
+        top: 10,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+          child: const Text('Hold steady, fill the screen with the words', style: TextStyle(color: Colors.white, fontSize: 15)),
+        ),
+      ),
+    ]);
   }
 
   Widget _result() => Column(children: [
         if (_photo != null)
-          SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+            child: ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: 150, width: double.infinity, child: Image.memory(_photo!, fit: BoxFit.cover))),
+          ),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (_orb == OrbState.reading) const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
-              if (_text.isNotEmpty) SelectableText(_text, style: const TextStyle(color: Colors.white, fontSize: 28, height: 1.35, fontWeight: FontWeight.w600)),
-              if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Colors.white70, fontSize: 20, height: 1.35)),
+              if (_text.isNotEmpty && _paras.length < 3) SelectableText(_text, style: const TextStyle(color: kInk, fontSize: 28, height: 1.35, fontWeight: FontWeight.w700)),
+              if (_paras.length >= 3) ...[
+                const Text('This is a long page. What do you want to hear?', style: TextStyle(color: kInk, fontSize: 22, fontWeight: FontWeight.w800, height: 1.25)),
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  ActionChip(label: const Text('Read it all', style: TextStyle(fontSize: 17)), onPressed: () => _sayParts(_paras, mark: 0)),
+                  ActionChip(label: const Text('Headline', style: TextStyle(fontSize: 17)), onPressed: () => _sayParts([_paras.first], mark: 0)),
+                  ActionChip(label: const Text('Short summary', style: TextStyle(fontSize: 17)), onPressed: _summarise),
+                  ActionChip(avatar: const Icon(Icons.stop, size: 18), label: const Text('Stop', style: TextStyle(fontSize: 17)), onPressed: () {
+                    _rg++;
+                    _player.stop();
+                    _tts.stop();
+                    _set(() => _orb = OrbState.idle);
+                  }),
+                ]),
+                const SizedBox(height: 12),
+                const Text('Or tap a paragraph:', style: TextStyle(color: kSub, fontSize: 15)),
+                const SizedBox(height: 6),
+                for (var i = 0; i < _paras.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Semantics(
+                      button: true,
+                      label: 'Read paragraph ${i + 1}',
+                      child: Material(
+                        color: i == _sel ? kMint : Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: i == _sel ? kPrimary : kLine)),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () => _sayParts([_paras[i]], mark: i),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text('${i + 1}', style: const TextStyle(color: kPrimary, fontSize: 20, fontWeight: FontWeight.w800)),
+                              const SizedBox(width: 12),
+                              Expanded(child: Text(_paras[i], style: const TextStyle(color: kInk, fontSize: 19, height: 1.35))),
+                            ]),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+              if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: kSub, fontSize: 19, height: 1.35)),
               if (_original.isNotEmpty && _text.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                Text(_original, style: const TextStyle(color: Colors.white38, fontSize: 15)),
+                Text(_original, style: const TextStyle(color: kSub, fontSize: 15)),
+              ],
+              if (_text.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(14)),
+                  child: const Text('Please double-check medicine names, doses and numbers against the original.', style: TextStyle(color: kInk, fontSize: 15, height: 1.35)),
+                ),
               ],
             ]),
           ),
@@ -275,16 +412,12 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   Widget build(BuildContext context) {
     final showing = _photo != null;
     return Scaffold(
-      backgroundColor: kNavy,
-      extendBodyBehindAppBar: true,
+      backgroundColor: kBg,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text('Capture', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text('Capture'),
         actions: [
-          if (!showing && _cam != null) IconButton(icon: Icon(_flash ? Icons.flash_on : Icons.flash_off), onPressed: _toggleFlash),
-          IconButton(icon: const Icon(Icons.folder_open), onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen()))),
+          if (!showing && _cam != null) IconButton(icon: Icon(_flash ? Icons.flash_on : Icons.flash_off), tooltip: 'Light', onPressed: _toggleFlash),
+          IconButton(icon: const Icon(Icons.bookmark_border), tooltip: 'Saved', onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen()))),
         ],
       ),
       body: SafeArea(
@@ -302,7 +435,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                         onPressed: _busy ? null : _again,
                         icon: const Icon(Icons.photo_camera, size: 28),
                         label: const Text('New photo', style: TextStyle(fontSize: 20)),
-                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64), backgroundColor: kBlue),
+                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(64)),
                       ),
                     ),
                     if (_text.isNotEmpty) ...[
@@ -310,18 +443,23 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                       IconButton.filled(
                         onPressed: _listenAgain,
                         icon: const Icon(Icons.volume_up, size: 30),
-                        style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: kTeal, foregroundColor: Colors.black),
+                        tooltip: 'Listen again',
+                        style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: kMint, foregroundColor: kPrimary),
                       ),
                     ],
                   ])
-                : GestureDetector(
-                    onTap: _shoot,
-                    child: Container(
-                      width: 78,
-                      height: 78,
-                      decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 4)),
-                      padding: const EdgeInsets.all(6),
-                      child: const DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white)),
+                : Semantics(
+                    button: true,
+                    label: 'Take a photo',
+                    child: GestureDetector(
+                      onTap: _shoot,
+                      child: Container(
+                        width: 80,
+                        height: 80,
+                        decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: kPrimary, width: 4)),
+                        padding: const EdgeInsets.all(6),
+                        child: const DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: kPrimary)),
+                      ),
                     ),
                   ),
           ),

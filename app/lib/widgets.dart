@@ -3,12 +3,77 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
-const kNavy = Color(0xFF0B1630);
-const kCard = Color(0xFF14224A);
-const kTeal = Color(0xFF2DD4BF);
-const kBlue = Color(0xFF3B82F6);
-const kOrange = Color(0xFFFB923C);
-const kPink = Color(0xFFF472B6);
+// Tilda's look: calm and light, one deep teal, soft mint cards, large plain text.
+const kBg = Color(0xFFF6FAF8); // page
+const kInk = Color(0xFF13211D); // text
+const kSub = Color(0xFF55665F); // secondary text
+const kPrimary = Color(0xFF0B6B5A); // buttons, the one accent
+const kMint = Color(0xFFE1F3EC); // cards
+const kLine = Color(0xFFCFE0D9); // thin borders
+const kPeach = Color(0xFFFCE6DC); // "the other person" in Translate
+const kDark = Color(0xFF0E1A17); // the camera screen only
+// older names, kept so every screen picks up the new look
+const kNavy = kBg;
+const kCard = kMint;
+const kTeal = kPrimary;
+const kBlue = kPrimary;
+const kOrange = Color(0xFFC96A3F);
+const kPink = kPrimary;
+
+ThemeData tildaTheme() {
+  final scheme = ColorScheme.fromSeed(seedColor: kPrimary, brightness: Brightness.light).copyWith(
+    primary: kPrimary,
+    onPrimary: Colors.white,
+    surface: kBg,
+    onSurface: kInk,
+    surfaceContainerHighest: kMint,
+    outline: kLine,
+  );
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: scheme,
+    scaffoldBackgroundColor: kBg,
+    canvasColor: kBg,
+    appBarTheme: const AppBarTheme(
+        backgroundColor: kBg, foregroundColor: kInk, elevation: 0, scrolledUnderElevation: 0, centerTitle: false,
+        titleTextStyle: TextStyle(color: kInk, fontSize: 22, fontWeight: FontWeight.w700)),
+    textTheme: ThemeData.light().textTheme.apply(bodyColor: kInk, displayColor: kInk),
+    filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+            backgroundColor: kPrimary, foregroundColor: Colors.white, minimumSize: const Size(64, 54),
+            shape: const StadiumBorder(), textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600))),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+            foregroundColor: kPrimary, side: const BorderSide(color: kLine), minimumSize: const Size(64, 50), shape: const StadiumBorder())),
+    chipTheme: ChipThemeData(
+        backgroundColor: kMint, selectedColor: kPrimary, side: BorderSide.none, shape: const StadiumBorder(),
+        labelStyle: const TextStyle(color: kInk, fontSize: 16), secondaryLabelStyle: const TextStyle(color: Colors.white),
+        checkmarkColor: Colors.white),
+    switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? Colors.white : kSub),
+        trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? kPrimary : kLine)),
+    dividerTheme: const DividerThemeData(color: kLine, space: 1),
+    inputDecorationTheme: InputDecorationTheme(
+        filled: true, fillColor: kMint, hintStyle: const TextStyle(color: kSub),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none)),
+  );
+}
+
+/// A soft mint card. Every list row and panel in the app uses this, so the screens feel like one thing.
+class TildaCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsets padding;
+  final Color color;
+  final VoidCallback? onTap;
+  const TildaCard({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.color = kMint, this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: color,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(borderRadius: BorderRadius.circular(20), onTap: onTap, child: Padding(padding: padding, child: child)),
+      );
+}
 
 enum OrbState { idle, listening, reading, thinking, speaking }
 
@@ -27,12 +92,11 @@ String orbLabel(OrbState s) {
   }
 }
 
-/// Tilda's face: a soft living blob of light, drawn flat in 2D. Its colour, speed and wobble glide smoothly
-/// from one state to the next. Calm and teal when idle, blue and swelling with your voice while listening,
-/// violet with small orbiting dots while thinking, warm orange pulsing while she speaks, a scan line while reading.
+/// Tilda's voice shown as a few teal bars: still and low when idle, moving with your voice while listening,
+/// a quick ripple while thinking, a steady pulse while she speaks. (Kept under its old name so every screen uses it.)
 class TildaOrb extends StatefulWidget {
   final OrbState state;
-  final double level; // 0..1 loudness, drives the swell while listening
+  final double level; // 0..1 loudness, drives the bars while listening
   final double size;
   const TildaOrb({super.key, required this.state, this.level = 0, this.size = 190});
 
@@ -40,27 +104,11 @@ class TildaOrb extends StatefulWidget {
   State<TildaOrb> createState() => _TildaOrbState();
 }
 
-class _OrbLook {
-  final Color a, b; // the two colours the blob blends between
-  final double wobble, speed, glow;
-  const _OrbLook(this.a, this.b, this.wobble, this.speed, this.glow);
-}
-
-const _looks = {
-  OrbState.idle: _OrbLook(Color(0xFF2DD4BF), Color(0xFF3B82F6), 0.05, 0.35, 0.45),
-  OrbState.listening: _OrbLook(Color(0xFF3B82F6), Color(0xFF22D3EE), 0.10, 0.9, 0.7),
-  OrbState.thinking: _OrbLook(Color(0xFF8B5CF6), Color(0xFF3B82F6), 0.07, 1.3, 0.6),
-  OrbState.speaking: _OrbLook(Color(0xFFFB923C), Color(0xFFF472B6), 0.12, 1.1, 0.75),
-  OrbState.reading: _OrbLook(Color(0xFF2DD4BF), Color(0xFF38BDF8), 0.06, 0.7, 0.6),
-};
-
 class _TildaOrbState extends State<TildaOrb> with SingleTickerProviderStateMixin {
   late final Ticker _tick;
   final _frame = ValueNotifier<int>(0);
   Duration _last = Duration.zero;
-  double _phase = 0; // moves faster or slower with the state, never jumps
-  double _wobble = 0.05, _speed = 0.35, _glow = 0.45, _lvl = 0, _swing = 0;
-  Color _a = _looks[OrbState.idle]!.a, _b = _looks[OrbState.idle]!.b;
+  double _phase = 0, _amp = 0.18, _speed = 0.6, _lvl = 0;
 
   @override
   void initState() {
@@ -68,16 +116,14 @@ class _TildaOrbState extends State<TildaOrb> with SingleTickerProviderStateMixin
     _tick = createTicker((e) {
       final dt = ((e - _last).inMicroseconds / 1e6).clamp(0.0, 0.05);
       _last = e;
-      final to = _looks[widget.state]!;
-      final k = 1 - math.exp(-dt * 5); // glide: about a fifth of a second to settle
-      _a = Color.lerp(_a, to.a, k)!;
-      _b = Color.lerp(_b, to.b, k)!;
-      _wobble += (to.wobble - _wobble) * k;
-      _speed += (to.speed - _speed) * k;
-      _glow += (to.glow - _glow) * k;
-      _lvl += ((widget.state == OrbState.listening ? (widget.level * 6).clamp(0.0, 1.0) : 0.0) - _lvl) * (1 - math.exp(-dt * 14));
+      final st = widget.state;
+      final ampTo = switch (st) { OrbState.idle => 0.16, OrbState.listening => 0.3, OrbState.thinking => 0.38, OrbState.speaking => 0.62, OrbState.reading => 0.34 };
+      final spTo = switch (st) { OrbState.idle => 0.5, OrbState.listening => 1.4, OrbState.thinking => 2.6, OrbState.speaking => 1.9, OrbState.reading => 1.2 };
+      final k = 1 - math.exp(-dt * 5);
+      _amp += (ampTo - _amp) * k;
+      _speed += (spTo - _speed) * k;
+      _lvl += ((st == OrbState.listening ? (widget.level * 6).clamp(0.0, 1.0) : 0.0) - _lvl) * (1 - math.exp(-dt * 14));
       _phase += dt * _speed * 2 * math.pi;
-      _swing = widget.state == OrbState.speaking ? 0.5 + 0.5 * math.sin(_phase * 3.2) : _swing * 0.9;
       _frame.value++;
     })..start();
   }
@@ -92,75 +138,36 @@ class _TildaOrbState extends State<TildaOrb> with SingleTickerProviderStateMixin
   @override
   Widget build(BuildContext context) => SizedBox(
         width: widget.size,
-        height: widget.size,
-        child: CustomPaint(painter: _OrbPainter(this, _frame)),
+        height: widget.size * 0.55,
+        child: CustomPaint(painter: _BarsPainter(this, _frame)),
       );
 }
 
-class _OrbPainter extends CustomPainter {
+class _BarsPainter extends CustomPainter {
   final _TildaOrbState o;
-  _OrbPainter(this.o, Listenable repaint) : super(repaint: repaint);
-
-  Path _blob(Offset c, double r, double amp, double ph, int k) {
-    final p = Path();
-    const n = 72;
-    for (var i = 0; i <= n; i++) {
-      final t = i / n * 2 * math.pi;
-      final w = math.sin(t * k + ph) * 0.6 + math.sin(t * (k + 1) - ph * 1.3) * 0.4;
-      final rr = r * (1 + amp * w);
-      final pt = c + Offset(math.cos(t), math.sin(t)) * rr;
-      i == 0 ? p.moveTo(pt.dx, pt.dy) : p.lineTo(pt.dx, pt.dy);
-    }
-    return p..close();
-  }
+  _BarsPainter(this.o, Listenable repaint) : super(repaint: repaint);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final c = size.center(Offset.zero);
-    final base = size.width * 0.27;
-    final st = o.widget.state;
-    final breathe = 1 + 0.03 * math.sin(o._phase * 0.8);
-    final r = base * breathe * (1 + 0.22 * o._lvl + 0.10 * o._swing);
-    final amp = o._wobble + 0.10 * o._lvl + 0.05 * o._swing;
-    final ph = o._phase;
-
-    final haloR = r * 2.2;
-    canvas.drawCircle(c, haloR, Paint()..shader = RadialGradient(colors: [o._a.withOpacity(0.38 * o._glow + 0.1), o._a.withOpacity(0)]).createShader(Rect.fromCircle(center: c, radius: haloR)));
-
-    // three soft layers, each wobbling at its own pace
-    canvas.drawPath(_blob(c, r * 1.08, amp * 1.2, ph * 0.8 + 1.0, 3), Paint()..color = o._b.withOpacity(0.38));
-    canvas.drawPath(_blob(c, r * 1.02, amp, -ph * 1.1 + 2.0, 4), Paint()..color = o._a.withOpacity(0.55));
-    final body = _blob(c, r, amp * 0.8, ph, 3);
-    canvas.drawPath(
-        body,
-        Paint()
-          ..shader = LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [o._b, o._a]).createShader(Rect.fromCircle(center: c, radius: r * 1.2)));
-    // a small highlight gives it a gentle sheen without making it look like a glass ball
-    canvas.drawCircle(c + Offset(-r * 0.32, -r * 0.36), r * 0.3, Paint()..shader = RadialGradient(colors: [Colors.white.withOpacity(0.55), Colors.white.withOpacity(0)]).createShader(Rect.fromCircle(center: c + Offset(-r * 0.32, -r * 0.36), radius: r * 0.3)));
-
-    if (st == OrbState.thinking) {
-      for (var i = 0; i < 3; i++) {
-        final a = ph * (i.isEven ? 1.0 : -0.8) + i * 2.1;
-        canvas.drawCircle(c + Offset(math.cos(a), math.sin(a)) * (r * (1.5 + 0.1 * i)), 4.5 - i, Paint()..color = Colors.white.withOpacity(0.9));
-      }
-    }
-    if (st == OrbState.reading) {
-      canvas.save();
-      canvas.clipPath(body);
-      final y = c.dy - r + (0.5 + 0.5 * math.sin(ph * 1.6)) * 2 * r;
-      canvas.drawRect(Rect.fromLTWH(c.dx - r, y - 3, r * 2, 6), Paint()..color = Colors.white.withOpacity(0.65));
-      canvas.restore();
-    }
-    if (st == OrbState.listening || st == OrbState.speaking) {
-      for (var i = 0; i < 2; i++) {
-        final p = ((ph / (2 * math.pi) * 0.6) + i / 2) % 1.0;
-        canvas.drawCircle(c, r * (1.15 + 0.8 * p), Paint()..style = PaintingStyle.stroke..strokeWidth = 1.6..color = o._a.withOpacity(0.35 * (1 - p)));
-      }
+    const n = 11;
+    final gap = size.width / n;
+    final w = gap * 0.42;
+    final active = o.widget.state != OrbState.idle;
+    for (var i = 0; i < n; i++) {
+      final edge = 1 - ((i - (n - 1) / 2).abs() / ((n - 1) / 2)) * 0.55; // the middle bars are the tallest
+      final wave = 0.5 + 0.5 * math.sin(o._phase + i * 0.7);
+      final h = size.height * (0.14 + (o._amp + 0.5 * o._lvl) * wave * edge).clamp(0.12, 1.0);
+      final x = gap * (i + 0.5);
+      final paint = Paint()
+        ..color = (active ? kPrimary : kPrimary.withOpacity(0.55))
+        ..strokeWidth = w
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(Offset(x, size.height / 2 - h / 2), Offset(x, size.height / 2 + h / 2), paint);
     }
   }
 
   @override
-  bool shouldRepaint(_OrbPainter old) => false;
+  bool shouldRepaint(_BarsPainter old) => false;
 }
 
 /// A glow that breathes along the screen edges. Blue while recording, grey when nothing is heard.
@@ -193,8 +200,8 @@ class _GlowFrameState extends State<GlowFrame> with SingleTickerProviderStateMix
                 animation: _c,
                 builder: (_, __) {
                   final a = widget.quiet ? 0.18 : 0.30 + 0.30 * _c.value;
-                  final c1 = widget.quiet ? Colors.grey : kBlue;
-                  final c2 = widget.quiet ? Colors.blueGrey : kTeal;
+                  final c1 = widget.quiet ? Colors.grey : kPrimary;
+                  final c2 = widget.quiet ? Colors.blueGrey : const Color(0xFF3FB59D);
                   return DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: RadialGradient(

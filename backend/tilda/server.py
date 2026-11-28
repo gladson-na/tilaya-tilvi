@@ -21,10 +21,36 @@ from . import tools
 from .translate import TranslateError, translate, transliterate
 
 app = Flask(__name__, static_folder="static")
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("TILDA_MAX_UPLOAD_MB", "25")) * 1024 * 1024
+
+
+def jbody() -> dict:
+    """The JSON body, or an empty dict when it is missing, broken or not an object (so a bad request cannot crash a route)."""
+    j = request.get_json(silent=True)
+    return j if isinstance(j, dict) else {}
+
+
+def _ip() -> str:
+    return (request.headers.get("X-Forwarded-For", request.remote_addr or "?")).split(",")[0].strip()[:64]
+
+
+@app.errorhandler(413)
+def _too_big(e):
+    return jsonify(error="that file is too big"), 413
+
+
+@app.errorhandler(Exception)
+def _any_error(e):
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return jsonify(error=e.description), e.code
+    app.logger.error("unhandled: %s", e)
+    return jsonify(error="something went wrong on the server"), 500
 
 # Protect the paid speech credits: a per-address rate limit, a daily cap, and a duplicate-upload cache.
 _HITS = defaultdict(deque)
 _DAY = {"day": "", "n": 0}
+_ALL = deque()  # every POST in the last minute, so rotating fake addresses cannot get round the per-address limit
 _DONE = OrderedDict()  # piece id -> finished answer, so a retried upload is not billed twice
 
 
@@ -32,8 +58,13 @@ _DONE = OrderedDict()  # piece id -> finished answer, so a retried upload is not
 def _guard():
     if request.method != "POST":
         return None
-    ip = (request.headers.get("X-Forwarded-For", request.remote_addr or "?")).split(",")[0].strip()
+    ip = _ip()
     now = time.time()
+    while _ALL and now - _ALL[0] > 60:
+        _ALL.popleft()
+    if len(_ALL) >= int(os.environ.get("TILDA_GLOBAL_PER_MIN", "300")):
+        return jsonify(error="busy right now, try again in a moment"), 429
+    _ALL.append(now)
     q = _HITS[ip]
     while q and now - q[0] > 60:
         q.popleft()
@@ -89,12 +120,12 @@ def status():
 
 @app.post("/act")
 def act():
-    return jsonify(interpret((request.get_json(silent=True) or {}).get("text", "")))
+    return jsonify(interpret(jbody().get("text", "")))
 
 
 @app.post("/translate")
 def do_translate():
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     text, source, target = j.get("text", ""), j.get("source", "auto"), j.get("target", "en-IN")
     if os.environ.get("TILDA_FAKE"):
         return jsonify(text=f"(demo translation to {target}) {text}", target=target)
@@ -106,7 +137,7 @@ def do_translate():
 
 @app.post("/chat")
 def do_chat():
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     msgs, lang = j.get("messages", []), j.get("lang", "en-IN")
     if os.environ.get("TILDA_FAKE"):
         return jsonify(reply="(demo reply) " + (msgs[-1]["content"] if msgs else ""))
@@ -123,7 +154,7 @@ def do_chat():
 @app.post("/talk")
 def talk_route():
     """Streams the answer sentence by sentence, each with its voice, as one JSON object per line."""
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     msgs, lang = j.get("messages", []), j.get("lang", "en-IN")
 
     def num(v):
@@ -155,7 +186,7 @@ def talk_route():
 
 @app.post("/feedback")
 def feedback():
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     kind, text = j.get("kind", "suggestion"), str(j.get("text", "")).strip()[:2000]
     if kind not in ("complaint", "suggestion") or not text:
         return jsonify(error="say what the complaint or suggestion is"), 400
@@ -165,7 +196,7 @@ def feedback():
 @app.post("/read")
 def read_photo():
     """A photo of text (sign, medicine strip, bill) in, the text and its translation out."""
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     img, lang = str(j.get("image", "")), j.get("lang", "en-IN")
     if len(img) < 100:
         return jsonify(error="no photo received"), 400
@@ -180,7 +211,7 @@ def read_photo():
 
 @app.post("/summary")
 def do_summary():
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     text, lang = str(j.get("text", "")).strip(), j.get("lang", "en-IN")
     if len(text) < 20:
         return jsonify(error="not enough words to summarise yet"), 400
@@ -195,7 +226,7 @@ def do_summary():
 
 @app.post("/translit")
 def do_translit():
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     text, source, target = j.get("text", ""), j.get("source", "auto"), j.get("target", "hi-IN")
     if os.environ.get("TILDA_FAKE"):
         return jsonify(text=f"(demo letters in {target}) {text}", target=target)
@@ -207,7 +238,7 @@ def do_translit():
 
 @app.post("/speak")
 def do_speak():
-    j = request.get_json(silent=True) or {}
+    j = jbody()
     if os.environ.get("TILDA_FAKE"):
         return jsonify(error="no voice in demo mode"), 503
     try:
@@ -233,15 +264,30 @@ def beta():
     return jsonify(sorted(BETA))
 
 
+class BadAudio(Exception):
+    pass
+
+
 def to_wav(raw: bytes) -> str:
     src = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
     src.write(raw)
     src.close()
     out = src.name + ".wav"
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src.name,
-                    "-af", "highpass=f=90,afftdn=nr=12:nf=-30,dynaudnorm=f=150:g=7",  # cut traffic rumble and hiss, even out loudness
-                    "-ar", "16000", "-ac", "1", out], check=True)
-    os.unlink(src.name)
+    try:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src.name,
+                        "-af", "highpass=f=90,afftdn=nr=12:nf=-30,dynaudnorm=f=150:g=7",  # cut traffic rumble and hiss, even out loudness
+                        "-ar", "16000", "-ac", "1", out], check=True, timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        try:
+            os.unlink(out)
+        except OSError:
+            pass
+        raise BadAudio("could not read that audio")
+    finally:
+        try:
+            os.unlink(src.name)
+        except OSError:
+            pass
     return out
 
 
@@ -271,13 +317,19 @@ def pan_audio(b64: str, side: str) -> str:
 @app.post("/transcribe")
 def do_transcribe():
     piece = request.form.get("piece", "")
-    if piece and piece in _DONE:
-        return jsonify(_DONE[piece])
+    cache_key = f"{_ip()}|{piece}"  # a piece id from another phone must never return this phone's text
+    if piece and cache_key in _DONE:
+        return jsonify(_DONE[cache_key])
+    if "audio" not in request.files:
+        return jsonify(error="no audio received"), 400
     raw = request.files["audio"].read()
     forced = request.form.get("lang", "auto")  # "auto" = greeting then auto-detect
     mine = [x for x in request.form.get("mine", "").split(",") if x][:12]  # the user's own languages
     hints = request.form.get("hints", "")[:400]  # optional personal word list, used for this request only
-    wav = to_wav(raw)
+    try:
+        wav = to_wav(raw)
+    except BadAudio as e:
+        return jsonify(error=str(e)), 400
     first_chain, main_chain = chains()
     log, greeting_langs, said = [], None, ""
     try:
@@ -311,11 +363,12 @@ def do_transcribe():
                     res, main_log = transcribe(wav, lang, main_chain, timeout=8, hints=hints)
                     log += main_log
                 res.text = tools.clean_tail(res.text)
-                answer = dict(text=res.text, engine=res.engine, language=lang,
+                shown = res.language if (lang == "unknown" and getattr(res, "language", None)) else lang
+                answer = dict(text=res.text, engine=res.engine, language=shown,
                               greeting_found=bool(greeting_langs), heard_first=said, log=log,
                               action=interpret(res.text))
                 if piece:
-                    _DONE[piece] = answer
+                    _DONE[cache_key] = answer
                     while len(_DONE) > 200:
                         _DONE.popitem(last=False)
                 return jsonify(answer)

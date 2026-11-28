@@ -22,6 +22,11 @@ class NotesScreen extends StatefulWidget {
   State<NotesScreen> createState() => _NotesScreenState();
 }
 
+/// The buttons on the floating strip (over YouTube, Meet or Zoom) reach this screen through here.
+class NotesCtl {
+  static Future<void> Function(String)? handler;
+}
+
 class _NotesScreenState extends State<NotesScreen> {
   final _mic = Mic(clean: false);
   bool _internal = false; // recording the phone's own sound instead of the microphone
@@ -29,6 +34,10 @@ class _NotesScreenState extends State<NotesScreen> {
   Timer? _lvlT;
   Timer? _cut;
   bool _on = false;
+  bool _paused = false;
+  DateTime _pausedAt = DateTime.now();
+  int _epoch = 0; // bumped on Cancel so a piece that was still being sent is thrown away
+  DateTime _startedAt = DateTime.now();
   bool _quiet = false;
   int _tab = 0;
   String _spoken = '', _lettersText = '', _meaningText = '', _summary = '';
@@ -54,15 +63,71 @@ class _NotesScreenState extends State<NotesScreen> {
   void initState() {
     super.initState();
     unawaited(Api.wake());
+    NotesCtl.handler = _onCtl;
   }
 
   @override
   void dispose() {
+    if (NotesCtl.handler == _onCtl) NotesCtl.handler = null;
     _cut?.cancel();
     _lvlT?.cancel();
     _mic.dispose();
     if (_on) _service(false);
     super.dispose();
+  }
+
+  Future<void> _onCtl(String what) async {
+    if (!_on) return;
+    if (what == 'pause') _setPaused(true, fromStrip: true);
+    if (what == 'resume') _setPaused(false, fromStrip: true);
+    if (what == 'stop') await _stop();
+    if (what == 'cancel') await _cancel();
+  }
+
+  void _setPaused(bool p, {bool fromStrip = false}) {
+    if (!_on || p == _paused) return;
+    if (p) {
+      _pausedAt = DateTime.now();
+    } else {
+      _startedAt = _startedAt.add(DateTime.now().difference(_pausedAt)); // paused time does not count towards the demo limit
+      _lastLoud = DateTime.now();
+    }
+    _set(() {
+      _paused = p;
+      _quiet = false;
+      _status = p ? 'Paused. Nothing is being written.' : 'Listening. Notes are being written.';
+    });
+    if (!fromStrip && Platform.isAndroid) {
+      _native.invokeMethod('notesPaused', p).catchError((_) {});
+    }
+  }
+
+  /// Throws the recording away: nothing is summarised and nothing stays in Saved.
+  Future<void> _cancel() async {
+    _epoch++;
+    _cut?.cancel();
+    _lvlT?.cancel();
+    try {
+      if (_internal) {
+        await _rotate();
+      } else {
+        await _mic.stop();
+      }
+    } catch (_) {}
+    await _service(false);
+    _waiting.clear();
+    for (final it in List<SavedItem>.of(Store.items)) {
+      if (it.id == _id) await Store.remove(it);
+    }
+    _id = Store.newId();
+    _set(() {
+      _on = false;
+      _paused = false;
+      _quiet = false;
+      _summarising = false;
+      _spoken = _lettersText = _meaningText = _summary = '';
+      _status = 'Recording cancelled. Nothing was kept.';
+    });
   }
 
   Future<void> _service(bool on) async {
@@ -104,8 +169,21 @@ class _NotesScreenState extends State<NotesScreen> {
       _id = Store.newId();
       _spoken = _lettersText = _meaningText = '';
     }
+    _paused = false;
     _lastLoud = DateTime.now();
-    _cut = Timer.periodic(const Duration(seconds: 2), (_) => _slice());
+    _startedAt = DateTime.now();
+    _cut = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_on && !_paused && !Api.noLimit && DateTime.now().difference(_startedAt).inSeconds >= Api.demoMinutes * 60) {
+        final m = ScaffoldMessenger.maybeOf(context);
+        m?.showSnackBar(SnackBar(
+          duration: const Duration(seconds: 12),
+          content: Text('Demo limit: ${Api.demoMinutes} minutes, to protect the free speech credits until 3 December. Longer recording is built and switched off for now.'),
+        ));
+        _stop();
+        return;
+      }
+      _slice();
+    });
     _set(() {
       _on = true;
       _quiet = false;
@@ -126,6 +204,7 @@ class _NotesScreenState extends State<NotesScreen> {
 
   void _onLevel(double l) {
     _lvl = l;
+    if (_paused) return;
     if (l > 0.006) _lastLoud = DateTime.now();
     final q = DateTime.now().difference(_lastLoud).inSeconds > 15;
     if (q != _quiet && mounted) {
@@ -139,6 +218,16 @@ class _NotesScreenState extends State<NotesScreen> {
   /// Every 10 to 20 seconds (waiting for a pause in the talking) the recording so far is sent off and a new one starts.
   Future<void> _slice() async {
     if (!(_internal || _mic.on) || _rotating) return;
+    if (_paused) {
+      // keep emptying the buffer, but throw the sound away
+      _rotating = true;
+      try {
+        await _rotate();
+      } finally {
+        _rotating = false;
+      }
+      return;
+    }
     final t = _secs;
     if (t < 10 || (t < 20 && _lvl > 0.03)) return;
     _rotating = true;
@@ -159,8 +248,10 @@ class _NotesScreenState extends State<NotesScreen> {
     try {
       while (_waiting.isNotEmpty && mounted) {
         final wav = _waiting.first;
+        final ep = _epoch;
         try {
           final j = await Api.transcribe(wav, 'auto', widget.style.myLangs.toList(), fast: true, ext: (wav.length > 4 && wav[0] == 0x52 && wav[1] == 0x49) ? 'wav' : _mic.ext);
+          if (ep != _epoch) continue; // cancelled while this piece was on its way
           _waiting.removeAt(0);
           final text = ((j['text'] ?? '') as String).trim();
           final lang = (j['language'] ?? 'auto') as String;
@@ -170,7 +261,7 @@ class _NotesScreenState extends State<NotesScreen> {
           _keep();
           unawaited(_extras(text).then((_) => _keep()));
         } catch (_) {
-          _set(() => _status = 'Waiting for the network. Your recording is kept.');
+          _set(() => _status = 'Waiting for the network. I will keep trying while this screen is open.');
           if (_waiting.length > 40) _waiting.removeAt(0);
           break;
         }
@@ -184,13 +275,15 @@ class _NotesScreenState extends State<NotesScreen> {
   void _keep() {
     if (_spoken.trim().isEmpty) return;
     final first = _spoken.trim().split(RegExp(r'\s+')).take(7).join(' ');
-    unawaited(Store.put(SavedItem(
+    Store.put(SavedItem(
       id: _id,
       kind: 'note',
       title: first,
       lang: _src,
       parts: {'spoken': _spoken, 'letters': _lettersText, 'meaning': _meaningText, 'summary': _summary},
-    )));
+    )).then((ok) {
+      if (!ok) _set(() => _status = Store.lastError ?? 'Could not save.');
+    });
   }
 
   Future<void> _extras(String text) async {
@@ -242,16 +335,23 @@ class _NotesScreenState extends State<NotesScreen> {
   Future<void> _stop() async {
     _cut?.cancel();
     _lvlT?.cancel();
-    final rest = _internal ? await _rotate() : await _mic.stop();
+    var rest = _internal ? await _rotate() : await _mic.stop();
+    if (_paused) rest = Uint8List(0);
     await _service(false);
     if (rest.length > 600) _waiting.add(rest);
     _set(() {
+      _paused = false;
       _on = false;
       _quiet = false;
       _summarising = true;
       _status = 'Making your notes...';
     });
-    await _work();
+    await _drain();
+    if (_waiting.isNotEmpty) {
+      // the last part never reached the server: say so, rather than claiming it is kept
+      _waiting.clear();
+      _set(() => _status = 'The internet dropped, so the last part is not in your notes.');
+    }
     if (_spoken.trim().length < 20) {
       _set(() {
         _summarising = false;
@@ -260,6 +360,15 @@ class _NotesScreenState extends State<NotesScreen> {
       return;
     }
     await _makeSummary();
+  }
+
+  /// Waits until every piece has been written, including one that was already being sent when Stop was pressed.
+  Future<void> _drain() async {
+    for (var i = 0; i < 180; i++) {
+      await _work();
+      if (!_working) return;
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
   }
 
   Future<void> _makeSummary() async {
@@ -290,6 +399,21 @@ class _NotesScreenState extends State<NotesScreen> {
     }
   }
 
+  Future<void> _confirmCancel() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete this recording?'),
+        content: const Text('Nothing will be kept.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep recording')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true) await _cancel();
+  }
+
   Future<void> _toBackground() async {
     try {
       await _native.invokeMethod('toBack');
@@ -308,25 +432,25 @@ class _NotesScreenState extends State<NotesScreen> {
   Widget _toggle(String label, String sub, bool v, void Function(bool) f) => SwitchListTile(
         dense: true,
         contentPadding: EdgeInsets.zero,
-        activeColor: kTeal,
-        title: Text(label, style: const TextStyle(color: Colors.white)),
-        subtitle: Text(sub, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        activeColor: kPrimary,
+        title: Text(label, style: const TextStyle(color: kInk)),
+        subtitle: Text(sub, style: const TextStyle(color: kSub, fontSize: 13)),
         value: v,
         onChanged: f,
       );
 
   Widget _picker(String label, String value, void Function(String) f) => Row(children: [
-        SizedBox(width: 150, child: Text(label, style: const TextStyle(color: Colors.white70))),
+        SizedBox(width: 140, child: Text(label, style: const TextStyle(color: kSub, fontSize: 15))),
         Expanded(
           child: DropdownButton<String>(
             isExpanded: true,
             isDense: true,
-            dropdownColor: kCard,
+            dropdownColor: Colors.white,
             underline: const SizedBox.shrink(),
             value: value.isEmpty || !kLangs.containsKey(value) ? '' : value,
-            style: const TextStyle(color: kTeal, fontSize: 17, fontWeight: FontWeight.w700),
+            style: const TextStyle(color: kPrimary, fontSize: 17, fontWeight: FontWeight.w700),
             items: [
-              const DropdownMenuItem(value: '', child: Text('Off', style: TextStyle(color: Colors.white54))),
+              const DropdownMenuItem(value: '', child: Text('Off', style: TextStyle(color: kSub))),
               for (final e in kLangs.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
             ],
             onChanged: (v) => f(v ?? ''),
@@ -340,7 +464,7 @@ class _NotesScreenState extends State<NotesScreen> {
     if (!tabs.any((t) => t.$1 == _tab)) _tab = 0;
     return Scaffold(
       backgroundColor: kNavy,
-      appBar: AppBar(backgroundColor: kNavy, foregroundColor: Colors.white, elevation: 0, title: const Text('Take notes'), actions: [IconButton(icon: const Icon(Icons.folder_open), tooltip: 'Saved', onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())))]),
+      appBar: AppBar(title: const Text('Notes'), actions: [IconButton(icon: const Icon(Icons.bookmark_border), tooltip: 'Saved', onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SavedScreen())))]),
       body: GlowFrame(
         on: _on,
         quiet: _quiet,
@@ -350,12 +474,12 @@ class _NotesScreenState extends State<NotesScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(16)),
+                decoration: BoxDecoration(color: kMint, borderRadius: BorderRadius.circular(16)),
                 child: Column(children: [
                   Row(children: [
-                    Icon(Icons.fiber_manual_record, size: 14, color: _on ? (_quiet ? Colors.grey : Colors.redAccent) : Colors.white38),
+                    Icon(Icons.fiber_manual_record, size: 14, color: _on ? (_quiet ? Colors.grey : Colors.redAccent) : kSub),
                     const SizedBox(width: 8),
-                    const Expanded(child: Text('Written as spoken, in any language', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+                    const Expanded(child: Text('Written as you speak, in any language', style: TextStyle(color: kInk, fontWeight: FontWeight.w700, fontSize: 16))),
                   ]),
                   _picker('2nd copy, written in', _l2, (v) => _pick(true, v)),
                   _picker('Translation in', _l3, (v) => _pick(false, v)),
@@ -370,21 +494,44 @@ class _NotesScreenState extends State<NotesScreen> {
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(color: kCard.withOpacity(0.7), borderRadius: BorderRadius.circular(16)),
+                  decoration: BoxDecoration(color: Colors.white, border: Border.all(color: kLine), borderRadius: BorderRadius.circular(16)),
                   child: SingleChildScrollView(
                     reverse: _on,
                     child: SelectableText(
                       _shown,
-                      style: const TextStyle(color: Colors.white, fontSize: 17, height: 1.4),
+                      style: const TextStyle(color: kInk, fontSize: 18, height: 1.45),
                     ),
                   ),
                 ),
               ),
               const SizedBox(height: 8),
-              Text(_status, textAlign: TextAlign.center, style: TextStyle(color: _quiet ? Colors.amberAccent : Colors.white70)),
+              Text(_status, textAlign: TextAlign.center, style: TextStyle(color: _quiet ? const Color(0xFF9A5B00) : kSub, fontSize: 15)),
               const SizedBox(height: 8),
               if (!_on && !_summarising && _spoken.trim().length >= 20 && _summary.isEmpty)
                 TextButton.icon(onPressed: _makeSummary, icon: const Icon(Icons.auto_awesome), label: const Text('Make summary')),
+              if (_on)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _setPaused(!_paused),
+                        icon: Icon(_paused ? Icons.play_arrow : Icons.pause),
+                        label: Text(_paused ? 'Resume' : 'Pause', style: const TextStyle(fontSize: 17)),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _confirmCancel,
+                        icon: const Icon(Icons.close),
+                        label: const Text('Cancel', style: TextStyle(fontSize: 17)),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52), foregroundColor: const Color(0xFFB3261E)),
+                      ),
+                    ),
+                  ]),
+                ),
               if (_on)
                 OutlinedButton.icon(
                   onPressed: _toBackground,
@@ -396,14 +543,14 @@ class _NotesScreenState extends State<NotesScreen> {
                 if (_summary.isNotEmpty || _spoken.isNotEmpty)
                   IconButton(
                     onPressed: () => Clipboard.setData(ClipboardData(text: _shown)),
-                    icon: const Icon(Icons.copy, color: Colors.white70),
+                    icon: const Icon(Icons.copy, color: kPrimary),
                     tooltip: 'Copy',
                   ),
                 Expanded(
                   child: SizedBox(
                     height: 56,
                     child: FilledButton(
-                      style: FilledButton.styleFrom(backgroundColor: _on ? Colors.redAccent : kTeal, foregroundColor: Colors.black),
+                      style: FilledButton.styleFrom(backgroundColor: _on ? const Color(0xFFB3261E) : kPrimary, foregroundColor: Colors.white),
                       onPressed: _summarising ? null : (_on ? _stop : _start),
                       child: Text(_on ? 'Stop and make notes' : (_spoken.isEmpty ? 'Start notes' : 'Start again'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                     ),

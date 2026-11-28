@@ -36,7 +36,7 @@ class _SavedScreenState extends State<SavedScreen> {
     final items = Store.items;
     return Scaffold(
       backgroundColor: kNavy,
-      appBar: AppBar(backgroundColor: kNavy, foregroundColor: Colors.white, elevation: 0, title: const Text('Saved')),
+      appBar: AppBar(title: const Text('Saved')),
       body: !_ready
           ? const Center(child: CircularProgressIndicator())
           : items.isEmpty
@@ -44,7 +44,7 @@ class _SavedScreenState extends State<SavedScreen> {
                   child: Padding(
                     padding: EdgeInsets.all(32),
                     child: Text('Nothing saved yet. Your notes and Capture photos will appear here.',
-                        textAlign: TextAlign.center, style: TextStyle(color: Colors.white60, fontSize: 18, height: 1.4)),
+                        textAlign: TextAlign.center, style: TextStyle(color: kSub, fontSize: 18, height: 1.4)),
                   ),
                 )
               : ListView.separated(
@@ -54,7 +54,7 @@ class _SavedScreenState extends State<SavedScreen> {
                   itemBuilder: (_, i) {
                     final it = items[i];
                     return Material(
-                      color: kCard,
+                      color: kMint,
                       borderRadius: BorderRadius.circular(18),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(18),
@@ -65,14 +65,14 @@ class _SavedScreenState extends State<SavedScreen> {
                         child: Padding(
                           padding: const EdgeInsets.all(16),
                           child: Row(children: [
-                            Icon(it.kind == 'photo' ? Icons.photo_camera : Icons.edit_note, color: it.kind == 'photo' ? kPink : kTeal, size: 30),
+                            Icon(it.kind == 'photo' ? Icons.photo_camera_outlined : Icons.notes, color: kPrimary, size: 28),
                             const SizedBox(width: 14),
                             Expanded(
                               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                 Text(it.title.isEmpty ? (it.kind == 'photo' ? 'Photo' : 'Notes') : it.title,
-                                    maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+                                    maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kInk, fontSize: 18, fontWeight: FontWeight.w700)),
                                 const SizedBox(height: 4),
-                                Text(_when(it.when), style: const TextStyle(color: Colors.white54, fontSize: 14)),
+                                Text(_when(it.when), style: const TextStyle(color: kSub, fontSize: 14)),
                               ]),
                             ),
                           ]),
@@ -114,19 +114,18 @@ class _SavedDetailState extends State<SavedDetail> {
     final keys = widget.item.parts.entries.where((e) => e.value.trim().isNotEmpty).map((e) => e.key).toList();
     final text = widget.item.parts[_tab] ?? '';
     return Scaffold(
-      backgroundColor: kNavy,
+      backgroundColor: kBg,
       appBar: AppBar(
-        backgroundColor: kNavy,
-        foregroundColor: Colors.white,
-        elevation: 0,
         title: Text(widget.item.kind == 'photo' ? 'Photo' : 'Notes'),
         actions: [
           IconButton(
             icon: const Icon(Icons.copy),
+            tooltip: 'Copy',
             onPressed: () => Clipboard.setData(ClipboardData(text: text)),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete',
             onPressed: () async {
               final ok = await showDialog<bool>(
                 context: context,
@@ -164,8 +163,8 @@ class _SavedDetailState extends State<SavedDetail> {
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: kCard.withOpacity(0.7), borderRadius: BorderRadius.circular(16)),
-                child: SingleChildScrollView(child: SelectableText(text, style: const TextStyle(color: Colors.white, fontSize: 19, height: 1.45))),
+                decoration: BoxDecoration(color: Colors.white, border: Border.all(color: kLine), borderRadius: BorderRadius.circular(16)),
+                child: SingleChildScrollView(child: SelectableText(text, style: const TextStyle(color: kInk, fontSize: 19, height: 1.45))),
               ),
             ),
           ]),

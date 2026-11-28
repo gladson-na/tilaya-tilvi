@@ -7,6 +7,8 @@ import os
 
 import requests
 
+from . import groq
+
 URL = "https://api.sarvam.ai/translate"
 # Sarvam covers the 22 official languages plus English. The neighbour-country languages are NOT covered.
 SUPPORTED = {
@@ -25,20 +27,26 @@ NAMES = {"en-IN": "English", "hi-IN": "Hindi", "te-IN": "Telugu", "ta-IN": "Tami
          "od-IN": "Odia", "as-IN": "Assamese", "ur-IN": "Urdu", "ne-IN": "Nepali"}
 
 
+def _pieces(text: str, size: int = 900) -> list:
+    """Cuts long text at sentence ends so every piece fits the translation engines."""
+    from .tools import _split
+    return _split(text, size) or [text]
+
+
 def groq_translate(text: str, source: str, target: str) -> str:
-    """Backup when Sarvam is down: open Llama on Groq's free tier."""
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
+    """Backup when Sarvam is down: Groq's open models."""
+    if not os.environ.get("GROQ_API_KEY"):
         raise TranslateError("no GROQ_API_KEY")
     src = f"from {NAMES[source]} " if source in NAMES else ""
     prompt = f"Translate the user's text {src}into {NAMES.get(target, target)}. Reply with the translation only."
-    r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
-                      json={"model": "llama-3.3-70b-versatile", "temperature": 0.1, "max_tokens": 600,
-                            "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": text[:1000]}]},
-                      timeout=25)
-    if r.status_code != 200:
-        raise TranslateError(f"groq http {r.status_code}")
-    return (r.json()["choices"][0]["message"]["content"] or "").strip()
+    out = []
+    for piece in _pieces(text):
+        try:
+            out.append(groq.chat([{"role": "system", "content": prompt}, {"role": "user", "content": piece}],
+                                 max_tokens=700, temperature=0.1, timeout=25))
+        except groq.GroqError as e:
+            raise TranslateError(f"groq: {e}")
+    return " ".join(out).strip()
 
 
 def translate(text: str, source: str, target: str, api_key: str | None = None) -> str:
@@ -65,31 +73,37 @@ def sarvam_translate(text: str, source: str, target: str, api_key: str | None = 
     if not key:
         raise TranslateError("no SARVAM_API_KEY")
     model = "mayura:v1" if source == "auto" else "sarvam-translate:v1"
-    r = requests.post(
-        URL,
-        headers={"api-subscription-key": key, "Content-Type": "application/json"},
-        json={"input": text[:1000], "source_language_code": source, "target_language_code": target, "model": model},
-        timeout=20,
-    )
-    if r.status_code != 200:
-        raise TranslateError(f"sarvam http {r.status_code}")
-    return r.json().get("translated_text", "")
+    out = []
+    for piece in _pieces(text):
+        try:
+            r = requests.post(
+                URL,
+                headers={"api-subscription-key": key, "Content-Type": "application/json"},
+                json={"input": piece, "source_language_code": source, "target_language_code": target, "model": model},
+                timeout=20,
+            )
+        except requests.RequestException as e:
+            raise TranslateError(f"sarvam network: {type(e).__name__}")
+        if r.status_code != 200:
+            raise TranslateError(f"sarvam http {r.status_code}")
+        out.append(r.json().get("translated_text", ""))
+    return " ".join(x for x in out if x).strip()
 
 
 def groq_translit(text: str, target: str) -> str:
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
+    if not os.environ.get("GROQ_API_KEY"):
         raise TranslateError("no GROQ_API_KEY")
     prompt = (f"Write the user's text in {NAMES.get(target, target)} script, exactly as it sounds. Do not translate: keep the "
               f"same words, spelling foreign words the way {NAMES.get(target, target)} speakers write them. If it is already in "
               "that script, return it unchanged. Reply with the result only.")
-    r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
-                      json={"model": "llama-3.3-70b-versatile", "temperature": 0.1, "max_tokens": 700,
-                            "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": text[:1000]}]},
-                      timeout=25)
-    if r.status_code != 200:
-        raise TranslateError(f"groq http {r.status_code}")
-    return (r.json()["choices"][0]["message"]["content"] or "").strip()
+    out = []
+    for piece in _pieces(text):
+        try:
+            out.append(groq.chat([{"role": "system", "content": prompt}, {"role": "user", "content": piece}],
+                                 max_tokens=700, temperature=0.1, timeout=25))
+        except groq.GroqError as e:
+            raise TranslateError(f"groq: {e}")
+    return " ".join(out).strip()
 
 
 def transliterate(text: str, source: str, target: str, api_key: str | None = None) -> str:

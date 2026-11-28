@@ -12,6 +12,8 @@ from fractions import Fraction
 
 import requests
 
+from . import groq
+
 UA = {"User-Agent": "TildaHackathon/1.0 (voice assistant demo)"}
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 SARVAM_CHAT = "https://api.sarvam.ai/v1/chat/completions"
@@ -44,7 +46,6 @@ LIVE_RE = re.compile(
     r"\b(today|tonight|tomorrow|latest|news|price|rate of|cost of|score|current|currently|right now|who won|who is the|when is|"
     r"open now|train|flight|bus timing|schedule|result|stock|petrol|diesel|gold|exchange rate|trending|how long|how much time|travel time)\b|"
     r"आज|कल|ताज़ा|ताजा|खबर|समाचार|भाव|दाम|कीमत|स्कोर|नतीजा|रिज़ल्ट|ट्रेन|फ्लाइट|कितना समय|कितनी देर|कब है|ଆଜି|ଖବର|ଦାମ", re.I)
-WEB_MODELS = ("groq/compound-mini", "groq/compound")
 
 
 class ToolError(Exception):
@@ -69,15 +70,10 @@ def _first_json(text: str) -> dict:
 def llm_json(system: str, user: str) -> dict:
     """One small, exact question to a language model: Groq first (fast), Sarvam if Groq is not available."""
     msgs = [{"role": "system", "content": system + " Reply with JSON only."}, {"role": "user", "content": user[:1200]}]
-    gkey = os.environ.get("GROQ_API_KEY")
-    if gkey:
+    if os.environ.get("GROQ_API_KEY"):
         try:
-            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {gkey}"},
-                              json={"model": "llama-3.3-70b-versatile", "temperature": 0, "max_tokens": 300,
-                                    "response_format": {"type": "json_object"}, "messages": msgs}, timeout=15)
-            if r.status_code == 200:
-                return _first_json(r.json()["choices"][0]["message"]["content"])
-        except (requests.RequestException, KeyError, IndexError, ValueError, ToolError):
+            return _first_json(groq.chat(msgs, max_tokens=300, temperature=0, json_mode=True, timeout=15))
+        except (groq.GroqError, ToolError):
             pass
     skey = os.environ.get("SARVAM_API_KEY")
     if skey:
@@ -171,30 +167,17 @@ CAMERA_RE = re.compile(
     r"\b(read|scan|translate|capture)\s+(this|that|it)\b|\b(open|start|use)\s+(the\s+)?camera\b|\btake\s+(a\s+)?(photo|picture|pic)\b"
     r"|\bwhat does (this|that) say\b|यह पढ़|ये पढ़|कैमरा खोल|కెమెరా", re.I)
 
-VISION_MODELS = ("meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct")
-
-
 def web_answer(question: str, lang_name: str = "English") -> str:
-    """A short, checked answer from the live web (Groq's search-enabled model). Raises ToolError when it cannot."""
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
+    """A short, checked answer from the live web (Groq's browser search on gpt-oss). Raises ToolError when it cannot."""
+    if not os.environ.get("GROQ_API_KEY"):
         raise ToolError("key not set: add GROQ_API_KEY for live answers")
-    last = "no search model answered"
-    for model in WEB_MODELS:
-        try:
-            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"}, timeout=30, json={
-                "model": model, "temperature": 0.1, "max_tokens": 350, "messages": [
-                    {"role": "system", "content": "Answer from a web search in at most three short sentences, plain words, no links, no markdown. "
-                     "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "."},
-                    {"role": "user", "content": question}]})
-            if r.status_code == 200:
-                out = (r.json()["choices"][0]["message"]["content"] or "").strip()
-                if out:
-                    return out
-            last = f"{model}: {r.status_code}"
-        except (requests.RequestException, KeyError, IndexError, ValueError) as e:
-            last = f"{model}: {type(e).__name__}"
-    raise ToolError("web search failed (" + last + ")")
+    msgs = [{"role": "system", "content": "Answer from a web search in at most three short sentences, plain words, no links, no markdown. "
+             "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "."},
+            {"role": "user", "content": question}]
+    try:
+        return groq.chat(msgs, groq.WEB_MODELS, max_tokens=350, temperature=0.1, tools=[{"type": "browser_search"}], timeout=35)
+    except groq.GroqError as e:
+        raise ToolError("web search failed (" + str(e) + ")")
 
 
 _TAIL_RE = re.compile(r"(?:(?<=[.!?।॥])|\s)\s*(?:hello|hi|hey|bye|thank you|thanks|thanks for watching|नमस्ते|हेलो|धन्यवाद|शुक्रिया)\s*[.!?।]*\s*$", re.I)
@@ -214,29 +197,22 @@ def clean_tail(text: str) -> str:
 
 def read_image(image_b64: str, lang_name: str) -> dict:
     """Reads the text in a photo and translates it. Returns {"original": ..., "text": translation in lang_name}."""
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
+    if not os.environ.get("GROQ_API_KEY"):
         raise ToolError("key not set: add GROQ_API_KEY to read photos")
     prompt = (f"Read all the text you can see in this photo (a sign, a medicine strip, a bill, a board, a page). "
               f"Reply with JSON only: {{\"original\": the text exactly as written, \"translation\": that text translated into {lang_name}, "
               "written the way a person would say it out loud, short and clear}. If a medicine or label has numbers, keep them exact. "
+              "Put the headline or title first, on its own line. Separate each paragraph with a blank line, and keep the same paragraphs in the translation. "
               "If there is no readable text, use empty strings.")
-    last = "no vision model answered"
-    for model in VISION_MODELS:
-        try:
-            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"}, timeout=50, json={
-                "model": model, "temperature": 0.1, "max_tokens": 900, "response_format": {"type": "json_object"},
-                "messages": [{"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}}]}]})
-            if r.status_code != 200:
-                last = f"{model}: {r.status_code}"
-                continue
-            j = json.loads(r.json()["choices"][0]["message"]["content"])
-            return {"original": str(j.get("original") or "").strip(), "text": str(j.get("translation") or "").strip()}
-        except (requests.RequestException, KeyError, IndexError, ValueError) as e:
-            last = f"{model}: {type(e).__name__}"
-    raise ToolError("could not read the photo just now (" + last + ")")
+    msgs = [{"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}}]}]
+    try:
+        out = groq.chat(msgs, groq.VISION_MODELS, max_tokens=3500, temperature=0.1, json_mode=True, timeout=60)
+        j = _first_json(out)
+    except (groq.GroqError, ToolError) as e:
+        raise ToolError("could not read the photo just now (" + str(e) + ")")
+    return {"original": str(j.get("original") or "").strip(), "text": str(j.get("translation") or "").strip()}
 
 
 def context_for(messages, lat=None, lon=None) -> dict:
@@ -311,31 +287,59 @@ def _email(rec: dict, why: dict | None = None) -> bool:
         return False
 
 
-def summarize(text: str, lang_name: str) -> str:
-    """Short study notes from a long transcript (Groq first, Sarvam as backup). Keeps line breaks."""
-    system = (f"You make study notes from a class or video transcript. Write in {lang_name}. A short title line, then 5 to 9 "
-              "bullet points starting with '- ', then one line starting 'Remember:' with the single most important thing. "
-              "Use only what the transcript says. No markdown symbols other than the leading dashes.")
-    msgs = [{"role": "system", "content": system}, {"role": "user", "content": text[-12000:]}]
-    gkey, skey = os.environ.get("GROQ_API_KEY"), os.environ.get("SARVAM_API_KEY")
-    if gkey:
+def _llm_text(msgs, max_tokens=900, temperature=0.2) -> str:
+    """Groq first, Sarvam as backup. Raises ToolError when neither answers."""
+    if os.environ.get("GROQ_API_KEY"):
         try:
-            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {gkey}"}, timeout=40,
-                              json={"model": "llama-3.3-70b-versatile", "temperature": 0.2, "max_tokens": 900, "messages": msgs})
-            if r.status_code == 200:
-                return (r.json()["choices"][0]["message"]["content"] or "").strip()
-        except (requests.RequestException, KeyError, IndexError, ValueError):
+            return groq.chat(msgs, max_tokens=max_tokens, temperature=temperature, timeout=40)
+        except groq.GroqError:
             pass
+    skey = os.environ.get("SARVAM_API_KEY")
     if skey:
         try:
             r = requests.post(SARVAM_CHAT, headers={"api-subscription-key": skey}, timeout=50,
-                              json={"model": "sarvam-105b-conversations", "temperature": 0.2, "max_tokens": 900,
+                              json={"model": "sarvam-105b-conversations", "temperature": temperature, "max_tokens": max_tokens,
                                     "reasoning_effort": None, "messages": msgs})
             if r.status_code == 200:
-                return (r.json()["choices"][0]["message"]["content"] or "").strip()
+                out = (r.json()["choices"][0]["message"]["content"] or "").strip()
+                if out:
+                    return out
         except (requests.RequestException, KeyError, IndexError, ValueError):
             pass
     raise ToolError("no summary engine answered")
+
+
+def _split(text: str, size: int) -> list:
+    """Cuts at sentence ends or spaces so no piece is longer than `size`."""
+    parts, t = [], (text or "").strip()
+    while len(t) > size:
+        cut = max(t.rfind(c, 0, size) for c in (". ", "? ", "! ", "।", "\n"))
+        if cut < size // 2:
+            cut = t.rfind(" ", 0, size)
+        if cut < size // 2:
+            cut = size
+        parts.append(t[:cut + 1].strip())
+        t = t[cut + 1:].strip()
+    if t:
+        parts.append(t)
+    return parts
+
+
+def summarize(text: str, lang_name: str) -> str:
+    """Short study notes from a transcript. Long ones are read in parts so the beginning is never dropped."""
+    system = (f"You make study notes from a class or video transcript. Write in {lang_name}. A short title line, then 5 to 9 "
+              "bullet points starting with '- ', then one line starting 'Remember:' with the single most important thing. "
+              "Use only what the transcript says. Include action items (things someone has to do) as bullets starting 'To do:'. "
+              "No markdown symbols other than the leading dashes.")
+    text = (text or "").strip()
+    if len(text) <= 12000:
+        return _llm_text([{"role": "system", "content": system}, {"role": "user", "content": text}])
+    parts = _split(text, 10000)[:8]
+    part_sys = (f"Write in {lang_name}. These are the notes of one part of a longer talk. Give 5 to 8 bullet points starting with '- ', "
+                "keeping every name, number, date and action item that was said. Use only what the text says. Plain text.")
+    notes = [_llm_text([{"role": "system", "content": part_sys}, {"role": "user", "content": p}], max_tokens=700) for p in parts]
+    return _llm_text([{"role": "system", "content": system},
+                      {"role": "user", "content": "Notes of the whole talk, in order:\n\n" + "\n\n".join(notes)}])
 
 
 def _telegram(rec: dict, why: dict | None = None) -> bool:

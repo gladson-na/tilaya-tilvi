@@ -199,7 +199,8 @@ def test_duplicate_piece_not_reprocessed(monkeypatch):
     monkeypatch.setattr(server, "to_wav", lambda raw: __import__("tempfile").NamedTemporaryFile(delete=False).name)
     import io
     r1 = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p1", "lang": "hi-IN"}).get_json()
-    server._DONE["p1"]["text"] = "cached"
+    key = [k for k in server._DONE if k.endswith("|p1")][0]
+    server._DONE[key]["text"] = "cached"
     r2 = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p1", "lang": "hi-IN"}).get_json()
     assert r1["engine"] and r2["text"] == "cached"
 
@@ -580,3 +581,184 @@ def test_web_answer_needs_key(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     with pytest.raises(tools.ToolError):
         tools.web_answer("news today")
+
+
+# ---- Groq retired its old models in 2026: current models, fallbacks, long text ----
+
+class _GR:
+    def __init__(self, code, text="ok"):
+        self.status_code, self._t = code, text
+
+    def json(self):
+        return {"choices": [{"message": {"content": self._t}}]}
+
+
+def test_groq_uses_current_models_and_skips_a_retired_one(monkeypatch):
+    from tilda import groq
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    seen = []
+
+    def fake(url, **kw):
+        seen.append(kw["json"]["model"])
+        return _GR(404) if kw["json"]["model"] == "openai/gpt-oss-120b" else _GR(200, "hello")
+    monkeypatch.setattr(groq.requests, "post", fake)
+    assert groq.chat([{"role": "user", "content": "hi"}]) == "hello"
+    assert seen == ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+    assert not any("llama" in m for m in seen)
+
+
+def test_groq_gives_one_typed_error_on_timeout(monkeypatch):
+    from tilda import groq
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+
+    def boom(url, **kw):
+        raise groq.requests.Timeout("slow")
+    monkeypatch.setattr(groq.requests, "post", boom)
+    with pytest.raises(groq.GroqError):
+        groq.chat([{"role": "user", "content": "hi"}])
+
+
+def test_groq_retries_without_reasoning_switch_on_400(monkeypatch):
+    from tilda import groq
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    bodies = []
+
+    def fake(url, **kw):
+        bodies.append(kw["json"])
+        return _GR(400) if "reasoning_effort" in kw["json"] else _GR(200, "fine")
+    monkeypatch.setattr(groq.requests, "post", fake)
+    assert groq.chat([{"role": "user", "content": "hi"}]) == "fine"
+    assert "reasoning_effort" not in bodies[-1]
+
+
+def test_photo_reading_calls_a_vision_model_that_still_exists(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    seen = []
+
+    def fake(url, **kw):
+        seen.append(kw["json"])
+        return _GR(200, '{"original": "Take one", "translation": "एक लें"}')
+    monkeypatch.setattr(tools.requests, "post", fake)
+    assert tools.read_image("QUJD", "Hindi")["text"] == "एक लें"
+    assert seen[0]["model"] == "qwen/qwen3.8-27b"
+    assert seen[0]["messages"][0]["content"][1]["type"] == "image_url"
+
+
+def test_web_answer_uses_browser_search_on_gpt_oss(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    seen = []
+
+    def fake(url, **kw):
+        seen.append(kw["json"])
+        return _GR(200, "Petrol is 100 rupees.")
+    monkeypatch.setattr(tools.requests, "post", fake)
+    assert "Petrol" in tools.web_answer("petrol price today")
+    assert seen[0]["model"].startswith("openai/gpt-oss") and seen[0]["tools"] == [{"type": "browser_search"}]
+
+
+def test_long_translation_is_sent_in_pieces_not_cut_at_1000(monkeypatch):
+    from tilda import translate as tr
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    sent = []
+
+    class R:
+        status_code = 200
+        def __init__(self, t): self.t = t
+        def json(self): return {"translated_text": "T:" + self.t[:8]}
+
+    def fake(url, **kw):
+        sent.append(kw["json"]["input"])
+        return R(kw["json"]["input"])
+    monkeypatch.setattr(tr.requests, "post", fake)
+    text = " ".join(f"Sentence number {i} is here." for i in range(120))
+    out = tr.translate(text, "en-IN", "hi-IN")
+    assert len(sent) >= 3 and all(len(s) <= 900 for s in sent)
+    assert "".join(sent).replace(" ", "") == text.replace(" ", "")
+    assert out.count("T:") == len(sent)
+
+
+def test_sarvam_timeout_falls_to_groq_for_translate_and_chat(monkeypatch):
+    from tilda import talk, translate as tr
+    monkeypatch.setenv("SARVAM_API_KEY", "k")
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+
+    def fake(url, **kw):
+        if "sarvam" in url:
+            raise tr.requests.Timeout("slow")
+        return _GR(200, "backup answer")
+    monkeypatch.setattr(tr.requests, "post", fake)
+    assert tr.translate("hello", "en-IN", "hi-IN") == "backup answer"
+    assert talk.reply([{"role": "user", "content": "hi"}], "en-IN") == "backup answer"
+
+
+def test_long_summary_keeps_the_beginning(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    seen = []
+
+    def fake(url, **kw):
+        seen.append(kw["json"]["messages"][-1]["content"])
+        return _GR(200, "- point")
+    monkeypatch.setattr(tools.requests, "post", fake)
+    text = "FIRSTWORD " + ("filler sentence here. " * 2500) + " LASTWORD"
+    tools.summarize(text, "English")
+    assert len(seen) >= 4  # parts plus the final pass
+    assert any("FIRSTWORD" in s for s in seen)
+
+
+def test_cached_piece_is_not_shared_between_phones(monkeypatch):
+    from tilda import server
+    import io, tempfile
+    monkeypatch.setenv("TILDA_FAKE", "1")
+    monkeypatch.setattr(server, "to_wav", lambda raw: tempfile.NamedTemporaryFile(delete=False).name)
+    server._DONE.clear()
+    c = server.app.test_client()
+    a = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p9", "lang": "hi-IN"},
+               headers={"X-Forwarded-For": "1.1.1.1"}).get_json()
+    key = [k for k in server._DONE if k.endswith("|p9")][0]
+    server._DONE[key]["text"] = "phone one only"
+    b = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "piece": "p9", "lang": "hi-IN"},
+               headers={"X-Forwarded-For": "2.2.2.2"}).get_json()
+    assert a["engine"] and b["text"] != "phone one only"
+
+
+def test_detected_language_is_reported(monkeypatch):
+    from tilda import server
+    from tilda.engines import Result
+    import io, tempfile
+    monkeypatch.setattr(server, "to_wav", lambda raw: tempfile.NamedTemporaryFile(delete=False).name)
+    monkeypatch.setattr(server, "chains", lambda: ([], []))
+    monkeypatch.setattr(server, "transcribe", lambda wav, lang, chain, timeout=8, hints="": (Result("namaste", "x", language="hi-IN"), []))
+    c = server.app.test_client()
+    r = c.post("/transcribe", data={"audio": (io.BytesIO(b"x"), "a.wav"), "lang": "unknown"}).get_json()
+    assert r["language"] == "hi-IN"
+
+
+def test_bad_requests_get_clean_errors_not_crashes():
+    from tilda import server
+    c = server.app.test_client()
+    assert c.post("/translate", data="[1,2]", content_type="application/json").status_code in (200, 502)
+    assert c.post("/chat", data="[1,2]", content_type="application/json").status_code in (200, 502)
+    assert c.post("/transcribe", data={"lang": "hi-IN"}).status_code == 400
+    assert c.post("/read", data="not json", content_type="application/json").status_code == 400
+
+
+def test_upload_size_limit(monkeypatch):
+    from tilda import server
+    import io
+    server.app.config["MAX_CONTENT_LENGTH"] = 1000
+    try:
+        r = server.app.test_client().post("/transcribe", data={"audio": (io.BytesIO(b"x" * 5000), "a.wav")})
+        assert r.status_code == 413 and "too big" in r.get_json()["error"]
+    finally:
+        server.app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+
+
+def test_rotating_fake_addresses_hit_the_global_limit(monkeypatch):
+    from tilda import server
+    monkeypatch.setenv("TILDA_GLOBAL_PER_MIN", "3")
+    monkeypatch.setenv("TILDA_RATE_PER_MIN", "100")
+    server._HITS.clear(); server._ALL.clear()
+    c = server.app.test_client()
+    codes = [c.post("/act", json={"text": "hi"}, headers={"X-Forwarded-For": f"9.9.9.{i}"}).status_code for i in range(5)]
+    assert codes[:3] == [200] * 3 and codes[3] == 429
+    server._ALL.clear()
