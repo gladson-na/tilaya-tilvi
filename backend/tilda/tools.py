@@ -52,9 +52,12 @@ NEARBY_RE = re.compile(
     r"\b(near me|nearby|nearest|closest|close to me|around here|around me|in my area|my location|hospital|clinic|pharmacy|chemist|doctor|restaurant|hotel|hostel|atm|bank|petrol pump|police|"
     r"bus stop|station|supermarket|shop|temple|church|mosque|school|college)\b|"
     r"पास में|नज़दीक|नजदीक|आसपास|अस्पताल|दवाई की दुकान|ਨੇੜੇ|ਹਸਪਤਾਲ|ସମୀପ|ହସ୍ପିଟାଲ|దగ్గర|ఆసుపత్రి|அருகில்|மருத்துவமனை|ಹತ್ತಿರ|ಆಸ್ಪತ್ರೆ|അടുത്ത|ആശുപത്രി|কাছে|হাসপাতাল|નજીક|હોસ્પિટલ", re.I)
+CHAT_RE = re.compile(r"\b(joke|story|poem|song|riddle|translate|thank you|thanks|hello|hi there|good (?:morning|night|evening)|what time is it|what is the time|what is the date|how are you)\b", re.I)
 # a question: so Tilda looks it up live instead of answering from memory
 INFO_RE = re.compile(
-    r"\?|\b(what|which|who|where|when|why|how|tell me|find|show me|search|look up|best|price|cost|open|timing|address|phone number|contact)\b|"
+    r"\?|\b(what|which|who|where|when|why|how|tell me|find|show me|search|look up|best|price|cost|open|timing|address|phone number|contact|"
+    r"is|are|can|could|does|do|should|will|calories?|kcal|protein|carbs?|carbohydrates?|sugar|fat|healthy|safe|ingredients?|nutrition|vitamins?|"
+    r"alcohol|caffeine|vegetarian|vegan|expiry|mrp|side effects?|used in|contains?)\b|"
     r"क्या|कहाँ|कहां|कब|कौन|कैसे|कौनसा|बताओ|बताइए|ढूंढ|ଏଠାରେ|କେଉଁ|ఎక్కడ|ఏది|எங்கே|எது|ಎಲ್ಲಿ|ಯಾವುದು|എവിടെ|কোথায়|ક્યાં|ਕਿੱਥੇ", re.I)
 
 
@@ -354,6 +357,7 @@ def product_answer(question: str, label: str, lang_name: str, where: str = "") -
     sys = ("The user photographed a product and asks about it. The label text (it may be partly misread) is below. "
            "Find the product on the web and answer in " + lang_name + ", at most four short sentences, plain words, no links, no markdown. "
            "State facts only: what is listed, where you found a price and roughly what it is (say 'around'), and that prices change. "
+           "For calories, sugar, alcohol content, ingredients and nutrition, always give the figures (per serving, or per 100 ml or g) with 'around'. "
            "Never say a product or ingredient is harmful, safe, toxic or poisonous, and give no medical advice. "
            "If you cannot confirm something, say you could not confirm it. Today is " + now_text() + "." + where +
            "\nLABEL TEXT:\n" + (label or "")[:900])
@@ -395,7 +399,7 @@ def context_for(messages, lat=None, lon=None) -> dict:
             if lat is None or lon is None:
                 return {"intent": "weather", "extra": "LIVE DATA: the user's location is not shared, so you cannot check the weather. Say that, and ask which area they are in."}
             return {"intent": "weather", "extra": "LIVE DATA: " + weather(lat, lon)}
-        if (LIVE_RE.search(last) or NEARBY_RE.search(last) or (INFO_RE.search(last) and len(last.split()) >= 3)) and not _is_sum(last):
+        if (LIVE_RE.search(last) or NEARBY_RE.search(last) or (INFO_RE.search(last) and len(last.split()) >= 3)) and not _is_sum(last) and not CHAT_RE.search(last):
             where = ""
             if lat is not None and lon is not None:
                 where = (f" The user's phone is at latitude {lat:.4f}, longitude {lon:.4f}"

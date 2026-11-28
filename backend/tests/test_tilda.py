@@ -877,3 +877,19 @@ def test_distance_reads_the_place_when_the_model_is_down(monkeypatch):
     monkeypatch.setattr(tools.requests, "get", lambda *a, **k: R())
     assert "2.3 km" in tools.distance(18.94, 72.83, "Okay, how far is Churchgate from here?")
     assert seen["p"] == "Churchgate"
+
+
+@pytest.mark.parametrize("q", [
+    "is Maggi healthy", "is Red Bull good for me", "is Dettol safe for kids", "calories in biryani",
+    "can I drink coconut water every day", "is palm oil used in Parle-G", "is this vegetarian", "is it safe to eat curd at night",
+    "how many calories in a Coke", "how much sugar is in Pepsi", "what is the MRP of Dairy Milk", "what are the side effects of paracetamol",
+])
+def test_everyday_product_and_health_questions_reach_the_web(monkeypatch, q):
+    monkeypatch.setattr(tools, "web_answer", lambda qq, lang_name="English", where="": "WEB")
+    assert tools.context_for([{"role": "user", "content": q}], 18.9, 72.8)["intent"] == "live"
+
+
+@pytest.mark.parametrize("q", ["tell me a joke", "hello", "thank you", "what time is it", "good morning Tilda", "translate good morning to Hindi"])
+def test_chit_chat_does_not_cost_a_web_search(monkeypatch, q):
+    monkeypatch.setattr(tools, "web_answer", lambda *a, **k: pytest.fail("searched the web for chit-chat"))
+    assert tools.context_for([{"role": "user", "content": q}])["intent"] is None
