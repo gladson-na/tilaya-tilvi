@@ -94,6 +94,12 @@ class LiveStt {
     } else if (e.permanent) {
       active = false;
       _onEnd?.call(e.errorMsg);
+    } else {
+      // busy / client / network hiccup: the engine stopped but we did not, so try again shortly
+      Future.delayed(const Duration(milliseconds: 900), () async {
+        if (!active) return;
+        if (!_stt.isListening) await _listen();
+      });
     }
   }
 

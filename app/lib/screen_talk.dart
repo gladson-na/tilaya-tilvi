@@ -55,6 +55,8 @@ class _TalkScreenState extends State<TalkScreen> {
   final _wake = LiveStt(); // listens for "Hey Tilda" while the conversation is closed
   bool _handsFree = true;
   bool _woke = false;
+  String _wakeHeard = ''; // what the phone last heard while waiting, so a failed Hey Tilda is not a mystery
+  int _wakeFails = 0;
   bool _viaType = false; // this turn was typed, so do not switch the mic on afterwards
 
   @override
@@ -80,9 +82,17 @@ class _TalkScreenState extends State<TalkScreen> {
       onPartial: _heardWake,
       onPhrase: _heardWake,
       onEnd: (why) {
-        if (!mounted) return;
+        if (!mounted || !_handsFree || _active) return;
         if (why == 'quiet' || why == 'error_no_match') {
-          Future.delayed(const Duration(milliseconds: 500), _startWake);
+          _wakeFails = 0;
+          Future.delayed(const Duration(milliseconds: 400), _startWake);
+        } else if (++_wakeFails <= 4) {
+          Future.delayed(const Duration(milliseconds: 1200), _startWake);
+        } else {
+          _set(() {
+            _handsFree = false;
+            _wakeHeard = 'Hands-free stopped ($why). Tap the mic instead.';
+          });
         }
       },
     );
@@ -91,6 +101,7 @@ class _TalkScreenState extends State<TalkScreen> {
 
   void _heardWake(String t) {
     if (_woke || _active || !_handsFree) return;
+    _set(() => _wakeHeard = t);
     if (!CallWords.called(t, widget.style)) return;
     _woke = true;
     unawaited(_wakeUp(t));
@@ -443,6 +454,11 @@ class _TalkScreenState extends State<TalkScreen> {
               icon: Icon(_handsFree ? Icons.hearing : Icons.hearing_disabled, color: kPrimary, size: 20),
               label: Text(_handsFree ? 'Say "Hey Tilda" or tap the mic. Tap here to turn off.' : 'Hands-free is off. Tap to turn on.',
                   style: const TextStyle(color: kSub, fontSize: 14)),
+            ),
+          if (!_active && _wakeHeard.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+              child: Text(_handsFree ? 'Heard: "$_wakeHeard"' : _wakeHeard, textAlign: TextAlign.center, style: const TextStyle(color: kSub, fontSize: 13)),
             ),
           if (_status.isNotEmpty)
             Padding(
