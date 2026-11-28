@@ -32,14 +32,6 @@ class MainActivity : FlutterActivity() {
         TildaService.onTap = { ch.invokeMethod("toggle", null) }
         TildaService.onLongPress = { ch.invokeMethod("longpress", null) }
         NotesService.onControl = { what -> runOnUiThread { ch.invokeMethod("notesCtl", what) } }
-        if (TildaService.pendingTap) {
-            // opened by a bubble tap: once the app is ready, start listening and go back to the app the person was typing in
-            TildaService.pendingTap = false
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                TildaService.tapAfterLaunch()
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ moveTaskToBack(true) }, 500)
-            }, 1800)
-        }
         ch.setMethodCallHandler { call, res ->
             when (call.method) {
                 "insert" -> res.success(TildaService.insert(call.arguments as String))
@@ -47,6 +39,7 @@ class MainActivity : FlutterActivity() {
                 "liveStart" -> res.success(TildaService.liveStart())
                 "liveSet" -> res.success(TildaService.liveSet(call.arguments as String))
                 "state" -> { TildaService.instance?.setState(call.arguments as String); res.success(true) }
+                "lang" -> { TildaService.saveLang(this, call.arguments as String); res.success(true) }
                 "auto" -> { TildaService.auto = call.arguments as Boolean; res.success(true) }
                 "enabled" -> res.success(TildaService.instance != null)
                 "notesOn" -> {

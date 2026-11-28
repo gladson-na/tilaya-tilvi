@@ -14,7 +14,18 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.WindowManager
-import android.widget.TextView
+import android.animation.ValueAnimator
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RadialGradient
+import android.graphics.RectF
+import android.graphics.Shader
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.view.View
+import android.view.animation.LinearInterpolator
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -25,8 +36,7 @@ class TildaService : AccessibilityService() {
         var onFocus: ((Boolean) -> Unit)? = null
         var onTap: (() -> Unit)? = null
         var onLongPress: (() -> Unit)? = null
-        var pendingTap = false // the bubble was tapped while the app was closed: start listening as soon as the app is up
-        fun tapAfterLaunch() { instance?.startFromLaunch() }
+        fun saveLang(c: Context, l: String) { try { c.getSharedPreferences("tilda_native", Context.MODE_PRIVATE).edit().putString("lang", l).apply() } catch (_: Exception) {} }
         fun label(t: String) { instance?.showLabel(t) }
         var auto = true
         fun insert(text: String): Boolean = instance?.doInsert(text) ?: false
@@ -35,7 +45,7 @@ class TildaService : AccessibilityService() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private var bubble: TextView? = null
+    private var bubble: BubbleView? = null
     private var st = "idle"
     private var savedX = -1
     private var savedY = -1
@@ -47,13 +57,8 @@ class TildaService : AccessibilityService() {
     private fun tapped() {
         val cb = onTap
         if (cb == null) {
-            // the app was closed: open it so it can take the next tap
-            showLabel("Open")
-            pendingTap = true
-            try {
-                val i = packageManager.getLaunchIntentForPackage(packageName)
-                if (i != null) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i) }
-            } catch (_: Exception) {}
+            // the app screen is gone: the bubble listens by itself and types into the box, Tilda never opens
+            nativeToggle()
             return
         }
         showLabel("…")
@@ -61,12 +66,53 @@ class TildaService : AccessibilityService() {
         try { cb() } catch (_: Exception) { showLabel("!"); stopMic() }
     }
 
-    /** The app has just opened because of a bubble tap: start listening now, then the app steps back. */
-    private fun startFromLaunch() {
-        val cb = onTap ?: return
-        showLabel("…")
+    private var rec: SpeechRecognizer? = null
+
+    private fun piece(t: String): String = if (liveBase.isNotEmpty() && !liveBase.endsWith(" ") && !liveBase.endsWith("\n")) " $t" else t
+
+    private fun endNative() { try { rec?.destroy() } catch (_: Exception) {}; rec = null }
+
+    /** With the app screen gone: the phone's own speech engine listens and the words go straight into the box. Tap again to stop. */
+    private fun nativeToggle() {
+        if (rec != null) {
+            try { rec?.stopListening() } catch (_: Exception) {}
+            setState("working")
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this) || !doLiveStart()) { setState("nothing"); return }
         startMic()
-        try { cb() } catch (_: Exception) { showLabel("!"); stopMic() }
+        setState("working")
+        val lang = try { getSharedPreferences("tilda_native", Context.MODE_PRIVATE).getString("lang", "en-IN") ?: "en-IN" } catch (_: Exception) { "en-IN" }
+        handler.postDelayed({
+            try {
+                val r = SpeechRecognizer.createSpeechRecognizer(this)
+                rec = r
+                r.setRecognitionListener(object : RecognitionListener {
+                    private fun best(b: Bundle?): String? = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                    override fun onReadyForSpeech(p: Bundle?) { setState("recording") }
+                    override fun onPartialResults(b: Bundle?) { best(b)?.let { doLiveSet(piece(it)) } }
+                    override fun onResults(b: Bundle?) {
+                        val t = best(b)
+                        if (t != null) { doLiveSet(piece(t)); setState("done") } else setState("nothing")
+                        endNative()
+                    }
+                    override fun onError(e: Int) {
+                        setState(if (e == SpeechRecognizer.ERROR_NO_MATCH || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) "nothing" else "idle")
+                        endNative()
+                    }
+                    override fun onBeginningOfSpeech() {}
+                    override fun onRmsChanged(v: Float) {}
+                    override fun onBufferReceived(b: ByteArray?) {}
+                    override fun onEndOfSpeech() { if (st == "recording") setState("working") }
+                    override fun onEvent(t: Int, b: Bundle?) {}
+                })
+                r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+                    .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName))
+            } catch (_: Exception) { endNative(); setState("nothing") }
+        }, 250)
     }
 
     /** Keeps the microphone allowed while another app is on screen (Android blocks it otherwise). */
@@ -111,44 +157,96 @@ class TildaService : AccessibilityService() {
         instance = this
     }
 
-    private fun paint(v: TextView) {
-        val c = when (st) { "recording" -> Color.RED; "working" -> Color.rgb(255, 160, 0); "nothing" -> Color.rgb(96, 125, 139); "done" -> Color.rgb(40, 160, 70); else -> Color.rgb(0, 150, 136) }
-        val g = GradientDrawable()
-        g.shape = GradientDrawable.OVAL
-        g.setColor(c)
-        v.background = g
-        v.text = labelOverride ?: when (st) { "recording" -> "■"; "working" -> "…"; "done" -> "✓"; "nothing" -> "🔇"; else -> "🎙" }
-        animateBubble(v)
+    private fun paint(v: BubbleView) {
+        v.mode = st
+        v.label = labelOverride
+        v.invalidate()
     }
 
-    private var animFor = ""
+    /** The bubble, drawn in the app's colours: a soft glow when idle, rings while listening, a turning arc while working. */
+    private inner class BubbleView(c: Context) : View(c) {
+        var mode = "idle"
+        var label: String? = null
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var phase = 0f
+        private var doneAt = 0L
+        private var lastMode = ""
+        private val anim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 1700
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener { phase = it.animatedValue as Float; invalidate() }
+        }
 
-    /** Recording: breathing pulse. Working: slow spin of the dots. Done: one pop. Idle: still. */
-    private fun animateBubble(v: TextView) {
-        if (animFor == st) return
-        animFor = st
-        v.animate().cancel()
-        v.scaleX = 1f; v.scaleY = 1f; v.rotation = 0f; v.alpha = 1f
-        when (st) {
-            "recording" -> {
-                val r = object : Runnable { override fun run() {
-                    if (animFor != "recording" || bubble == null) return
-                    v.animate().scaleX(1.18f).scaleY(1.18f).alpha(0.8f).setDuration(550).withEndAction {
-                        v.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(550).withEndAction(this).start()
-                    }.start()
-                } }
-                r.run()
+        override fun onAttachedToWindow() { super.onAttachedToWindow(); anim.start() }
+        override fun onDetachedFromWindow() { anim.cancel(); super.onDetachedFromWindow() }
+
+        private fun a(rgb: Int, alpha: Float) = (rgb and 0xFFFFFF) or ((alpha.coerceIn(0f, 255f)).toInt() shl 24)
+
+        override fun onDraw(cv: Canvas) {
+            val s = width.toFloat(); val c = s / 2
+            val m = if (label == "…") "working" else mode
+            if (m != lastMode) { lastMode = m; if (m == "done") doneAt = System.currentTimeMillis() }
+            val pop = if (m == "done") (1f + 0.22f * Math.max(0f, 1f - (System.currentTimeMillis() - doneAt) / 260f)) else 1f
+            val core = s * 0.33f * pop
+            val hi: Int; val lo: Int
+            when (m) {
+                "recording" -> { hi = 0xFFE0675D.toInt(); lo = 0xFFB3261E.toInt() }
+                "nothing" -> { hi = 0xFF8AA69E.toInt(); lo = 0xFF55716A.toInt() }
+                "done" -> { hi = 0xFF3DB48C.toInt(); lo = 0xFF0B6B5A.toInt() }
+                else -> { hi = 0xFF2D9C86.toInt(); lo = 0xFF0B6B5A.toInt() }
             }
-            "working" -> {
-                val r = object : Runnable { override fun run() {
-                    if (animFor != "working" || bubble == null) return
-                    v.animate().rotationBy(360f).setDuration(1100).setInterpolator(android.view.animation.LinearInterpolator()).withEndAction(this).start()
-                } }
-                r.run()
+            // halo
+            p.shader = null
+            if (m == "recording") {
+                for (k in 0..1) {
+                    val t = (phase + k * 0.5f) % 1f
+                    p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.035f
+                    p.color = a(0xB3261E, (1f - t) * 170f)
+                    cv.drawCircle(c, c, core + (c - core - s * 0.02f) * t, p)
+                }
+            } else {
+                val b = ((Math.sin(phase * 2 * Math.PI) + 1) / 2).toFloat()
+                p.style = Paint.Style.FILL
+                p.color = a(if (m == "nothing") 0x8AA69E else 0x9AD4C4, 45f + 70f * b)
+                cv.drawCircle(c, c, core + s * 0.05f + s * 0.05f * b, p)
             }
-            "done" -> v.animate().scaleX(1.3f).scaleY(1.3f).setDuration(160).withEndAction {
-                v.animate().scaleX(1f).scaleY(1f).setDuration(200).start()
-            }.start()
+            // soft shadow, then the core with a light from the top left
+            p.style = Paint.Style.FILL; p.color = 0x30000000
+            cv.drawCircle(c, c + s * 0.025f, core, p)
+            p.shader = RadialGradient(c - core * 0.4f, c - core * 0.45f, core * 1.7f, hi, lo, Shader.TileMode.CLAMP)
+            cv.drawCircle(c, c, core, p)
+            p.shader = null
+            p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.012f; p.color = a(0xFFFFFF, 90f)
+            cv.drawCircle(c, c, core - s * 0.006f, p)
+            // icon, all in white
+            p.color = Color.WHITE
+            p.strokeCap = Paint.Cap.ROUND; p.strokeJoin = Paint.Join.ROUND
+            val u = core
+            when {
+                label != null && label != "…" -> {
+                    p.style = Paint.Style.FILL; p.textAlign = Paint.Align.CENTER; p.textSize = s * 0.2f; p.isFakeBoldText = true
+                    cv.drawText(label!!, c, c + p.textSize * 0.35f, p); p.isFakeBoldText = false
+                }
+                m == "recording" -> { p.style = Paint.Style.FILL; cv.drawRoundRect(c - u * 0.3f, c - u * 0.3f, c + u * 0.3f, c + u * 0.3f, u * 0.12f, u * 0.12f, p) }
+                m == "working" -> {
+                    p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.05f
+                    cv.drawArc(RectF(c - u * 0.45f, c - u * 0.45f, c + u * 0.45f, c + u * 0.45f), phase * 360f, 250f, false, p)
+                }
+                m == "done" -> {
+                    p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.055f
+                    val t = Path(); t.moveTo(c - u * 0.38f, c + u * 0.02f); t.lineTo(c - u * 0.1f, c + u * 0.3f); t.lineTo(c + u * 0.4f, c - u * 0.26f)
+                    cv.drawPath(t, p)
+                }
+                else -> {
+                    p.style = Paint.Style.FILL
+                    cv.drawRoundRect(c - u * 0.2f, c - u * 0.55f, c + u * 0.2f, c + u * 0.12f, u * 0.2f, u * 0.2f, p)
+                    p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.04f
+                    cv.drawArc(RectF(c - u * 0.4f, c - u * 0.3f, c + u * 0.4f, c + u * 0.42f), 0f, 180f, false, p)
+                    cv.drawLine(c, c + u * 0.42f, c, c + u * 0.62f, p)
+                    if (m == "nothing") cv.drawLine(c - u * 0.45f, c - u * 0.5f, c + u * 0.45f, c + u * 0.55f, p)
+                }
+            }
         }
     }
 
@@ -157,11 +255,8 @@ class TildaService : AccessibilityService() {
         bubble?.let { paint(it); return }
         try {
             val d = resources.displayMetrics.density
-            val v = TextView(this)
-            v.textSize = 24f
-            v.setTextColor(Color.WHITE)
-            v.gravity = Gravity.CENTER
-            val size = (60 * d).toInt()
+            val v = BubbleView(this)
+            val size = (64 * d).toInt()
             val lp = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT)
@@ -202,7 +297,6 @@ class TildaService : AccessibilityService() {
         handler.removeCallbacks(watchR)
         bubble?.let { try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } catch (_: Exception) {} }
         bubble = null
-        animFor = ""
     }
 
     fun setState(s: String) {

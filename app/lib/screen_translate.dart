@@ -253,7 +253,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
               child: Row(children: [
                 IconButton(
                   onPressed: () => Navigator.of(context).maybePop(),
-                  icon: const Icon(Icons.arrow_back_ios_new, color: kInk, size: 18),
+                  icon: const Icon(Icons.arrow_back, color: kInk, size: 26),
                   tooltip: 'Back',
                 ),
                 Expanded(
