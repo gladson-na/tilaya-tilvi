@@ -233,6 +233,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         if (c.method == 'focus') {
           if (c.arguments == true) unawaited(_wake());
         }
+        if (c.method == 'wake') unawaited(_checkWake());
         if (c.method == 'toggle') _bubbleToggle();
         if (c.method == 'longpress') _nextLiveLang();
         if (c.method == 'notesCtl') await NotesCtl.handler?.call(c.arguments as String);
@@ -253,6 +254,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() => _styleLoaded = true);
       Future.delayed(const Duration(milliseconds: 800), _startHearHome);
+      unawaited(_applyBgListen());
+      unawaited(_checkWake());
     });
     _asr.check().then((_) async {
       if (mounted) setState(() {});
@@ -281,6 +284,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
+    if (Platform.isAndroid && _style.bgListen) {
+      // the screen owns the microphone while Tilda is open; the background listener takes over when it is not
+      if (state == AppLifecycleState.resumed) _native.invokeMethod('wakePause', true).catchError((_) {});
+      if (state == AppLifecycleState.paused) _native.invokeMethod('wakePause', false).catchError((_) {});
+    }
+    if (_foreground) unawaited(_checkWake());
     if (_foreground) {
       _startHearHome();
     } else {
@@ -308,6 +317,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } finally {
       _hearBusy = false;
     }
+  }
+
+  Future<void> _applyBgListen() async {
+    if (!Platform.isAndroid) return;
+    try {
+      if (_style.bgListen) {
+        await _native.invokeMethod('wakeStart', _style.callHeard.toList());
+        await _native.invokeMethod('wakePause', _foreground);
+      } else {
+        await _native.invokeMethod('wakeStop');
+      }
+    } catch (_) {}
+  }
+
+  /// The background listener heard "Hey Tilda" and brought the app up: open Talk and carry on from the words.
+  Future<void> _checkWake() async {
+    if (!Platform.isAndroid || !mounted || !_styleLoaded || !_style.setupDone) return;
+    try {
+      final t = await _native.invokeMethod<String>('takeWake');
+      if (t != null && t.trim().isNotEmpty && mounted) unawaited(_open(TalkScreen(style: _style, startWith: t)));
+    } catch (_) {}
   }
 
   void _heardHome(String t) {
@@ -1115,6 +1145,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       },
                     ),
                     const Divider(),
+                    if (Platform.isAndroid) ...[
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Keep listening in the background'),
+                        subtitle: const Text('Say "Hey Tilda" even when another app is on screen. Shows a notification and uses more battery. Off by default.'),
+                        value: _style.bgListen,
+                        onChanged: (v) async {
+                          setSheet(() => _style.bgListen = v);
+                          await _style.save();
+                          await _applyBgListen();
+                        },
+                      ),
+                      const Divider(),
+                    ],
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Type words as I say them'),

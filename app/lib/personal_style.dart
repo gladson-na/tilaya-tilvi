@@ -19,6 +19,7 @@ class PersonalStyle {
   final Set<String> callWords = {'hey'}; // how this person likes to call Tilda: hey, ae, oye, o, arre, suno, ok
   final Set<String> callHeard = {}; // how the phone's speech engine actually wrote their calls (learned in practice)
   final Set<String> callTrained = {}; // call-words practised three times: these will work
+  bool bgListen = false; // keep listening for "Hey Tilda" with the screen on another app (a notification shows; uses battery)
   bool callDone = false; // the call-word choice and practice has been done or skipped
   bool firstDone = false; // the first successful dictation has happened
   double trainedSeconds = 0; // reviewed speech collected so far
@@ -53,6 +54,7 @@ class PersonalStyle {
       }
       firstDone = j['firstDone'] == true;
       callDone = j['callDone'] == true;
+      bgListen = j['bgListen'] == true;
       if (j['callWords'] is List) {
         callWords
           ..clear()
@@ -87,6 +89,7 @@ class PersonalStyle {
           'myLangs': myLangs.toList(),
           'firstDone': firstDone,
           'callDone': callDone,
+          'bgListen': bgListen,
           'callWords': callWords.toList(),
           'callHeard': callHeard.toList(),
           'callTrained': callTrained.toList(),
