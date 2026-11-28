@@ -851,3 +851,29 @@ def test_relabel_route(monkeypatch):
     monkeypatch.delenv("TILDA_FAKE")
     monkeypatch.setattr(tools, "_faithful", lambda *a: "नमक\n\nचीनी")
     assert c.post("/relabel", json={"original": "Salt\n\nSugar", "lang": "hi-IN"}).get_json()["text"] == "नमक\n\nचीनी"
+
+
+def test_calorie_question_goes_to_the_web_not_the_calculator(monkeypatch):
+    monkeypatch.setattr(tools, "web_answer", lambda q, lang_name="English", where="": "about 286 kcal")
+    out = tools.context_for([{"role": "user", "content": "May I know how much Kingfisher Strong beer contains the calorie?"}])
+    assert out["intent"] == "live" and "286" in out["extra"]
+
+
+def test_sum_still_goes_to_the_calculator():
+    assert tools._is_sum("I sold 12 and 15 of it, how much in total")
+    assert not tools._is_sum("how much is the calorie in this")
+
+
+def test_distance_reads_the_place_when_the_model_is_down(monkeypatch):
+    def down(*a, **k):
+        raise tools.ToolError("down")
+    seen = {}
+    monkeypatch.setattr(tools, "llm_json", down)
+    monkeypatch.setattr(tools, "geocode", lambda p: (seen.setdefault("p", p) and 18.93, 72.83, "Churchgate"))
+
+    class R:
+        status_code = 200
+        def json(self): return {"routes": [{"distance": 2300, "duration": 180}]}
+    monkeypatch.setattr(tools.requests, "get", lambda *a, **k: R())
+    assert "2.3 km" in tools.distance(18.94, 72.83, "Okay, how far is Churchgate from here?")
+    assert seen["p"] == "Churchgate"

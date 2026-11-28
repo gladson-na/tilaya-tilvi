@@ -134,12 +134,23 @@ def calculate(text: str) -> str:
             + "; ".join(lines) + f". TOTAL = {total} rupees.")
 
 
+def weather_backup(lat: float, lon: float, why) -> str:
+    """The main weather service said no (usually too many requests from one server); wttr.in is the second source."""
+    try:
+        r = requests.get(f"https://wttr.in/{lat:.3f},{lon:.3f}", headers=UA, timeout=8, params={"format": "j1"})
+        c = r.json()["current_condition"][0]
+        return (f"Current weather at the user's location: {c['temp_C']} degrees Celsius (feels like {c['FeelsLikeC']}), "
+                f"{str(c['weatherDesc'][0]['value']).lower()}, humidity {c['humidity']} percent, wind {c['windspeedKmph']} km per hour.")
+    except (requests.RequestException, KeyError, IndexError, ValueError, TypeError):
+        raise ToolError(f"weather http {why}")
+
+
 def weather(lat: float, lon: float) -> str:
     r = requests.get("https://api.open-meteo.com/v1/forecast", headers=UA, timeout=8, params={
         "latitude": lat, "longitude": lon, "timezone": "auto",
         "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m"})
     if r.status_code != 200:
-        raise ToolError(f"weather http {r.status_code}")
+        return weather_backup(lat, lon, r.status_code)
     c = r.json().get("current") or {}
     if "temperature_2m" not in c:
         raise ToolError("no weather data")
@@ -159,8 +170,12 @@ def geocode(place: str):
 
 
 def distance(lat: float, lon: float, text: str) -> str:
-    place = str(llm_json('Find the destination the user asks the distance or time to. JSON: {"place":"..."}. Write the place in '
-                         'English with its city, like "Gateway of India, Mumbai". Empty string if there is none.', text).get("place", "")).strip()
+    try:
+        place = str(llm_json('Find the destination the user asks the distance or time to. JSON: {"place":"..."}. Write the place in '
+                             'English with its city, like "Gateway of India, Mumbai". Empty string if there is none.', text).get("place", "")).strip()
+    except ToolError:
+        m = re.search(r"(?:how far is|distance (?:to|from here to)|how long (?:to reach|to get to|to)|reach|to)\s+(.+?)(?:\s+from\s+(?:here|me|my\b.*|where i am))?\s*[?.!]*$", text.strip(), re.I)
+        place = m.group(1).strip() if m else ""
     if not place:
         raise ToolError("no destination named")
     dlat, dlon, name = geocode(place)
@@ -349,6 +364,11 @@ def product_answer(question: str, label: str, lang_name: str, where: str = "") -
         raise ToolError("web search failed (" + str(e) + ")")
 
 
+def _is_sum(text: str) -> bool:
+    """A sum to work out (two or more numbers), not a question that happens to say 'how much'."""
+    return bool(CALC_RE.search(text)) and (len(re.findall(r"\d+", text)) >= 2 or len(NUMWORDS_RE.findall(text)) >= 2)
+
+
 def context_for(messages, lat=None, lon=None) -> dict:
     """What Tilda should know before she answers: {"extra": text for the model, "intent": name or None}."""
     last = ""
@@ -375,7 +395,7 @@ def context_for(messages, lat=None, lon=None) -> dict:
             if lat is None or lon is None:
                 return {"intent": "weather", "extra": "LIVE DATA: the user's location is not shared, so you cannot check the weather. Say that, and ask which area they are in."}
             return {"intent": "weather", "extra": "LIVE DATA: " + weather(lat, lon)}
-        if (LIVE_RE.search(last) or NEARBY_RE.search(last) or (INFO_RE.search(last) and len(last.split()) >= 3)) and not CALC_RE.search(last):
+        if (LIVE_RE.search(last) or NEARBY_RE.search(last) or (INFO_RE.search(last) and len(last.split()) >= 3)) and not _is_sum(last):
             where = ""
             if lat is not None and lon is not None:
                 where = (f" The user's phone is at latitude {lat:.4f}, longitude {lon:.4f}"

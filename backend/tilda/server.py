@@ -118,22 +118,6 @@ def status():
     return jsonify(sarvam=sarvam, groq=groq, demo=demo, ready=demo or sarvam or groq)
 
 
-@app.get("/diag")
-def diag():
-    """Temporary: runs the live lookups once and shows the real error, so a failure is not a mystery. Removed before the demo."""
-    from . import tools
-    out = {"errors": dict(tools.LAST_ERR)}
-    q = request.args.get("q", "how many calories in Kingfisher Strong beer")
-    for name, fn in (("web", lambda: tools.web_answer(q)),
-                     ("distance", lambda: tools.distance(18.9400, 72.8350, request.args.get("d", "how far is Churchgate from here"))),
-                     ("weather", lambda: tools.weather(19.07, 72.87))):
-        try:
-            out[name] = fn()
-        except Exception as e:  # shown on purpose
-            out[name] = "ERROR " + type(e).__name__ + ": " + str(e)
-    return jsonify(out)
-
-
 @app.post("/act")
 def act():
     return jsonify(interpret(jbody().get("text", "")))
