@@ -893,3 +893,12 @@ def test_everyday_product_and_health_questions_reach_the_web(monkeypatch, q):
 def test_chit_chat_does_not_cost_a_web_search(monkeypatch, q):
     monkeypatch.setattr(tools, "web_answer", lambda *a, **k: pytest.fail("searched the web for chit-chat"))
     assert tools.context_for([{"role": "user", "content": q}])["intent"] is None
+
+
+def test_prices_are_asked_for_in_rupees(monkeypatch):
+    seen = []
+    monkeypatch.setenv("GROQ_API_KEY", "x")
+    monkeypatch.setattr(tools.groq, "chat", lambda msgs, *a, **k: seen.append(msgs[0]["content"]) or "ok")
+    tools.web_answer("what is the price of Amul milk")
+    tools.product_answer("current price?", "AMUL MILK", "English")
+    assert len(seen) == 2 and all("rupees" in s and "Never give dollars" in s for s in seen)

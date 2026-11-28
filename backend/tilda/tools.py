@@ -217,6 +217,11 @@ def place_name(lat: float, lon: float) -> str:
     return name
 
 
+# Tilda is for India: money is in rupees, shops are Indian ones, and amounts are written so a voice reads them right
+INDIA = (" The user is in India. Give every price in Indian rupees, written like '299 rupees', from Indian shops or apps "
+         "(Blinkit, Zepto, Swiggy Instamart, BigBasket, Amazon.in, Flipkart, the brand's own Indian site). "
+         "Never give dollars or other currencies: if only a foreign price exists, convert it to rupees and say 'around'.")
+
 LAST_ERR: dict = {}
 
 
@@ -229,7 +234,7 @@ def web_answer(question: str, lang_name: str = "English", where: str = "") -> st
     if not os.environ.get("GROQ_API_KEY"):
         raise ToolError("key not set: add GROQ_API_KEY for live answers")
     msgs = [{"role": "system", "content": "Answer from a web search in at most three short sentences, plain words, no links, no markdown. "
-             "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "." + where},
+             "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "." + INDIA + where},
             {"role": "user", "content": question}]
     try:
         return groq.chat(msgs, groq.WEB_MODELS, max_tokens=350, temperature=0.1, tools=[{"type": "browser_search"}], timeout=30)
@@ -359,7 +364,7 @@ def product_answer(question: str, label: str, lang_name: str, where: str = "") -
            "State facts only: what is listed, where you found a price and roughly what it is (say 'around'), and that prices change. "
            "For calories, sugar, alcohol content, ingredients and nutrition, always give the figures (per serving, or per 100 ml or g) with 'around'. "
            "Never say a product or ingredient is harmful, safe, toxic or poisonous, and give no medical advice. "
-           "If you cannot confirm something, say you could not confirm it. Today is " + now_text() + "." + where +
+           "If you cannot confirm something, say you could not confirm it. Today is " + now_text() + "." + INDIA + where +
            "\nLABEL TEXT:\n" + (label or "")[:900])
     msgs = [{"role": "system", "content": sys}, {"role": "user", "content": question}]
     try:
