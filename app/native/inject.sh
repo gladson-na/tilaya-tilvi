@@ -16,3 +16,29 @@ NS="<service android:name=\"$PKG.NotesService\" android:exported=\"false\" andro
 sed -i "s#</application>#$SVC$NS</application>#" "$M"
 grep -c TildaService "$M"
 grep -c NotesService "$M"
+
+# Launcher icon (the Tilda wave-T on teal) and the app name
+RES=android/app/src/main/res
+mkdir -p "$RES/mipmap-anydpi-v26"
+for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+  mkdir -p "$RES/mipmap-$d"
+  cp "native/icons/ic_launcher_$d.png" "$RES/mipmap-$d/ic_launcher.png"
+  cp "native/icons/ic_launcher_$d.png" "$RES/mipmap-$d/ic_launcher_round.png"
+  cp "native/icons/ic_launcher_foreground_$d.png" "$RES/mipmap-$d/ic_launcher_foreground.png"
+done
+cat > "$RES/values/tilda_colors.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<resources><color name="tilda_icon_bg">#0B6B5A</color></resources>
+XML
+for n in ic_launcher ic_launcher_round; do
+  cat > "$RES/mipmap-anydpi-v26/$n.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@color/tilda_icon_bg"/>
+  <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
+XML
+done
+sed -i '0,/android:label="[^"]*"/s##android:label="Tilda"#' "$M"
+sed -i 's#android:icon="@mipmap/ic_launcher"#android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round"#' "$M"
+grep -c 'android:label="Tilda"' "$M"

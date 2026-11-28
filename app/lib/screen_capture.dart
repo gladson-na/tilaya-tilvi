@@ -42,6 +42,9 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   int _sel = -1;
   int _rg = 0; // bumped to stop a long read-out
   bool _flash = false;
+  bool _paused = false; // the read-out is paused, not stopped
+  bool _viaPlayer = false; // the current piece plays from the server voice (can pause), not the phone voice
+  String _cur = '';
 
   @override
   void initState() {
@@ -224,17 +227,40 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
   Future<void> _say(String text) async {
     if (text.isEmpty) return;
     final spoken = text.length > 700 ? text.substring(0, 700) : text;
+    _cur = spoken;
+    if (_paused) _set(() => _paused = false);
     try {
       final b = await Api.speak(spoken, _lang);
       if (b != null) {
+        _viaPlayer = true;
         final done = _player.onPlayerComplete.first;
         await _player.play(BytesSource(b));
-        await done.timeout(const Duration(seconds: 90));
+        await done.timeout(const Duration(minutes: 5));
         return;
       }
+      _viaPlayer = false;
       await _tts.setLanguage(_lang == 'od-IN' ? 'or-IN' : _lang);
       await _tts.speak(spoken);
     } catch (_) {}
+  }
+
+  /// Pause the read-out where it is, or carry on from there.
+  Future<void> _togglePause() async {
+    if (_paused) {
+      _set(() => _paused = false);
+      if (_viaPlayer) {
+        await _player.resume();
+      } else {
+        await _tts.speak(_cur);
+      }
+    } else {
+      _set(() => _paused = true);
+      if (_viaPlayer) {
+        await _player.pause();
+      } else {
+        await _tts.stop();
+      }
+    }
   }
 
   /// A new language was picked after the photo: translate the words, show them, and read them out.
@@ -378,6 +404,7 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
 
   void _again() {
     _rg++;
+    _paused = false;
     _player.stop();
     _tts.stop();
     _set(() {
@@ -557,9 +584,9 @@ class _CaptureScreenState extends State<CaptureScreen> with WidgetsBindingObserv
                       ),
                       const SizedBox(width: 10),
                       IconButton.filled(
-                        onPressed: _listenAgain,
-                        icon: const Icon(Icons.volume_up, size: 30),
-                        tooltip: 'Listen again',
+                        onPressed: (_orb == OrbState.speaking || _paused) ? _togglePause : _listenAgain,
+                        icon: Icon(_paused ? Icons.play_arrow : (_orb == OrbState.speaking ? Icons.pause : Icons.volume_up), size: 30),
+                        tooltip: _paused ? 'Play' : (_orb == OrbState.speaking ? 'Pause' : 'Listen again'),
                         style: IconButton.styleFrom(minimumSize: const Size(64, 64), backgroundColor: kMint, foregroundColor: kPrimary),
                       ),
                     ],

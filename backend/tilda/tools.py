@@ -52,9 +52,12 @@ NEARBY_RE = re.compile(
     r"\b(near me|nearby|nearest|closest|close to me|around here|around me|in my area|my location|hospital|clinic|pharmacy|chemist|doctor|restaurant|hotel|hostel|atm|bank|petrol pump|police|"
     r"bus stop|station|supermarket|shop|temple|church|mosque|school|college)\b|"
     r"पास में|नज़दीक|नजदीक|आसपास|अस्पताल|दवाई की दुकान|ਨੇੜੇ|ਹਸਪਤਾਲ|ସମୀପ|ହସ୍ପିଟାଲ|దగ్గర|ఆసుపత్రి|அருகில்|மருத்துவமனை|ಹತ್ತಿರ|ಆಸ್ಪತ್ರೆ|അടുത്ത|ആശുപത്രി|কাছে|হাসপাতাল|નજીક|હોસ્પિટલ", re.I)
+CHAT_RE = re.compile(r"\b(joke|story|poem|song|riddle|translate|thank you|thanks|hello|hi there|good (?:morning|night|evening)|what time is it|what is the time|what is the date|how are you)\b", re.I)
 # a question: so Tilda looks it up live instead of answering from memory
 INFO_RE = re.compile(
-    r"\?|\b(what|which|who|where|when|why|how|tell me|find|show me|search|look up|best|price|cost|open|timing|address|phone number|contact)\b|"
+    r"\?|\b(what|which|who|where|when|why|how|tell me|find|show me|search|look up|best|price|cost|open|timing|address|phone number|contact|"
+    r"is|are|can|could|does|do|should|will|calories?|kcal|protein|carbs?|carbohydrates?|sugar|fat|healthy|safe|ingredients?|nutrition|vitamins?|"
+    r"alcohol|caffeine|vegetarian|vegan|expiry|mrp|side effects?|used in|contains?)\b|"
     r"क्या|कहाँ|कहां|कब|कौन|कैसे|कौनसा|बताओ|बताइए|ढूंढ|ଏଠାରେ|କେଉଁ|ఎక్కడ|ఏది|எங்கே|எது|ಎಲ್ಲಿ|ಯಾವುದು|എവിടെ|কোথায়|ક્યાં|ਕਿੱਥੇ", re.I)
 
 
@@ -214,6 +217,11 @@ def place_name(lat: float, lon: float) -> str:
     return name
 
 
+# Tilda is for India: money is in rupees, shops are Indian ones, and amounts are written so a voice reads them right
+INDIA = (" The user is in India. Give every price in Indian rupees, written like '299 rupees', from Indian shops or apps "
+         "(Blinkit, Zepto, Swiggy Instamart, BigBasket, Amazon.in, Flipkart, the brand's own Indian site). "
+         "Never give dollars or other currencies: if only a foreign price exists, convert it to rupees and say 'around'.")
+
 LAST_ERR: dict = {}
 
 
@@ -226,7 +234,7 @@ def web_answer(question: str, lang_name: str = "English", where: str = "") -> st
     if not os.environ.get("GROQ_API_KEY"):
         raise ToolError("key not set: add GROQ_API_KEY for live answers")
     msgs = [{"role": "system", "content": "Answer from a web search in at most three short sentences, plain words, no links, no markdown. "
-             "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "." + where},
+             "Give the date or time of the information when it matters. If you cannot find it, say so. Today is " + now_text() + "." + INDIA + where},
             {"role": "user", "content": question}]
     try:
         return groq.chat(msgs, groq.WEB_MODELS, max_tokens=350, temperature=0.1, tools=[{"type": "browser_search"}], timeout=30)
@@ -354,8 +362,9 @@ def product_answer(question: str, label: str, lang_name: str, where: str = "") -
     sys = ("The user photographed a product and asks about it. The label text (it may be partly misread) is below. "
            "Find the product on the web and answer in " + lang_name + ", at most four short sentences, plain words, no links, no markdown. "
            "State facts only: what is listed, where you found a price and roughly what it is (say 'around'), and that prices change. "
+           "For calories, sugar, alcohol content, ingredients and nutrition, always give the figures (per serving, or per 100 ml or g) with 'around'. "
            "Never say a product or ingredient is harmful, safe, toxic or poisonous, and give no medical advice. "
-           "If you cannot confirm something, say you could not confirm it. Today is " + now_text() + "." + where +
+           "If you cannot confirm something, say you could not confirm it. Today is " + now_text() + "." + INDIA + where +
            "\nLABEL TEXT:\n" + (label or "")[:900])
     msgs = [{"role": "system", "content": sys}, {"role": "user", "content": question}]
     try:
@@ -395,7 +404,7 @@ def context_for(messages, lat=None, lon=None) -> dict:
             if lat is None or lon is None:
                 return {"intent": "weather", "extra": "LIVE DATA: the user's location is not shared, so you cannot check the weather. Say that, and ask which area they are in."}
             return {"intent": "weather", "extra": "LIVE DATA: " + weather(lat, lon)}
-        if (LIVE_RE.search(last) or NEARBY_RE.search(last) or (INFO_RE.search(last) and len(last.split()) >= 3)) and not _is_sum(last):
+        if (LIVE_RE.search(last) or NEARBY_RE.search(last) or (INFO_RE.search(last) and len(last.split()) >= 3)) and not _is_sum(last) and not CHAT_RE.search(last):
             where = ""
             if lat is not None and lon is not None:
                 where = (f" The user's phone is at latitude {lat:.4f}, longitude {lon:.4f}"
