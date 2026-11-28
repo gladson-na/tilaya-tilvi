@@ -25,6 +25,8 @@ class TildaService : AccessibilityService() {
         var onFocus: ((Boolean) -> Unit)? = null
         var onTap: (() -> Unit)? = null
         var onLongPress: (() -> Unit)? = null
+        var pendingTap = false // the bubble was tapped while the app was closed: start listening as soon as the app is up
+        fun tapAfterLaunch() { instance?.startFromLaunch() }
         fun label(t: String) { instance?.showLabel(t) }
         var auto = true
         fun insert(text: String): Boolean = instance?.doInsert(text) ?: false
@@ -47,12 +49,21 @@ class TildaService : AccessibilityService() {
         if (cb == null) {
             // the app was closed: open it so it can take the next tap
             showLabel("Open")
+            pendingTap = true
             try {
                 val i = packageManager.getLaunchIntentForPackage(packageName)
                 if (i != null) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i) }
             } catch (_: Exception) {}
             return
         }
+        showLabel("…")
+        startMic()
+        try { cb() } catch (_: Exception) { showLabel("!"); stopMic() }
+    }
+
+    /** The app has just opened because of a bubble tap: start listening now, then the app steps back. */
+    private fun startFromLaunch() {
+        val cb = onTap ?: return
         showLabel("…")
         startMic()
         try { cb() } catch (_: Exception) { showLabel("!"); stopMic() }
